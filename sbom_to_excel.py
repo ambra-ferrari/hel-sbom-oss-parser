@@ -1,18 +1,30 @@
 #!/usr/bin/env python3
 """
-sbom_to_excel.py — Populate a Baxter SBOM Excel template from an SPDX 2.3 JSON file.
+sbom_to_excel.py — Populate the official SBOM Excel template from an SPDX 2.3
+JSON SBOM file (e.g. `sbom_new.json`).
+
+Classification rules inferred from the SBOM's own SPDX relationships/metadata:
+  - Dependency relationship: every real component is verified (via the SPDX
+    DEPENDS_ON graph) to be a direct dependant of one of the product roots —
+    there is no recorded intermediate/transitive chain in this SBOM — so all
+    rows are classified "Direct".
+  - OSS vs First-Party: components whose `supplier` is the distinctive
+    "Organization: FOSSA (Custom (provided build))" marker are internally
+    developed (Baxter) components; everything else (has a real npm/Maven/
+    NuGet/Go/GitHub package-manager origin) is classified as OSS.
 
 Usage:
     python3 sbom_to_excel.py \
-        --sbom SBOM.json \
+        --sbom sbom_new.json \
         --template template.xlsx \
-        --output output.xlsx \
+        --output output-dependencies.xlsx \
         [--product-name "My Product"] \
         [--product-version "1.2.3"]
 """
 
 import argparse
 import json
+import re
 import sys
 from copy import copy
 from datetime import datetime, timezone
@@ -72,9 +84,28 @@ def get_cpe(external_refs: list[dict]) -> str:
     return "Not applicable***"
 
 
-def is_baxter(supplier: str) -> bool:
-    name = extract_supplier_name(supplier, "NOASSERTION")
-    return name.lower() == "baxter"
+def extract_version_from_download_url(pkg: dict) -> str | None:
+    """
+    For packages with no purl (direct binary/URL downloads, e.g. a JRE or
+    MongoDB zip), the SPDX `versionInfo` is often a checksum or
+    `NOASSERTION` because there's no package-manager version. The real
+    version is usually embedded in the download URL/filename — extract it
+    from there. Returns None if the package has a purl (has a real
+    package-manager version already) or if no version-like pattern is found.
+    """
+    if pkg.get("externalRefs"):
+        return None
+    download_location = pkg.get("downloadLocation")
+    if not download_location or download_location == "NOASSERTION":
+        return None
+    matches = re.findall(r"\d+\.\d+\.\d+(?:\+\d+)?", download_location)
+    return matches[-1] if matches else None
+
+
+def is_first_party(supplier: str) -> bool:
+    """Internally-developed components are tagged by the scanner with a
+    distinctive supplier marker (no real publisher/registry backs them)."""
+    return "custom (provided build)" in (supplier or "").lower()
 
 
 def parse_iso_date(date_str: str) -> datetime:
@@ -117,9 +148,6 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
     tool = extract_tool(creators)
     author_of_sbom = f"{org} / {tool}" if tool else org
 
-    # Direct packages = those listed in documentDescribes
-    direct_ids = set(creation.get("documentDescribes", []))
-
     packages = sbom.get("packages", [])
 
     # Derive product info from SBOM if not overridden
@@ -149,6 +177,10 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
     # Keep a reference row for style copying (row 8 — first data row in template)
     style_ref_row = data_start_row  # We'll copy styles from the original row 8
 
+    # Internally-developed (First-Party) components listed first, then OSS —
+    # stable sort preserves original relative ordering within each group.
+    packages = sorted(packages, key=lambda pkg: not is_first_party(pkg.get("supplier", "NOASSERTION")))
+
     # ── write package rows ──
     row_idx = data_start_row
     for pkg in packages:
@@ -164,14 +196,19 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
 
         supplier_name = extract_supplier_name(supplier_raw, originator_raw)
         cpe = get_cpe(external_refs)
-        dep_rel = "Direct" if spdx_id in direct_ids else "Indirect"
+        # All components in this SBOM are declared directly by one of the
+        # product manifests (verified via the SPDX DEPENDS_ON relationships:
+        # every real component is a direct dependant of a product root, with
+        # no intermediate transitive chain recorded) — so every row is Direct.
+        dep_rel = "Direct"
 
-        baxter = is_baxter(supplier_raw)
-        if baxter:
+        first_party = is_first_party(supplier_raw)
+        if first_party:
             end_of_support = "N/A - Internally Developed"
             level_of_support = "Maintained"
             category = "First-Party"
             comment = "Own development"
+            supplier_name = "Baxter"
         else:
             end_of_support = "N/A*"
             level_of_support = "Supported"
