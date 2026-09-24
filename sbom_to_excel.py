@@ -24,6 +24,7 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import sys
 from copy import copy
@@ -100,6 +101,24 @@ def extract_version_from_download_url(pkg: dict) -> str | None:
         return None
     matches = re.findall(r"\d+\.\d+\.\d+(?:\+\d+)?", download_location)
     return matches[-1] if matches else None
+
+
+def load_version_overrides(path: str | None) -> dict[str, str]:
+    """
+    Load a manual version-override map from a JSON file of
+    {"<package name or SPDXID>": "<real version>"}. Returns {} if no path is
+    given. Exits with a clear error if the path doesn't exist or isn't valid
+    JSON — silent fallback would hide a typo in the file path.
+    """
+    if not path:
+        return {}
+    if not os.path.isfile(path):
+        sys.exit(f"version-overrides file not found: {path}")
+    with open(path, encoding="utf-8") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError as exc:
+            sys.exit(f"version-overrides file is not valid JSON: {path} ({exc})")
 
 
 def is_first_party(supplier: str) -> bool:
