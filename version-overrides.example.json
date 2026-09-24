@@ -1,0 +1,4 @@
+{
+  "_comment": "Copy to version-overrides.json and fill in real versions for packages whose SPDX versionInfo is a commit SHA or otherwise not human-readable. Keys are the package's short name (as shown in the xlsx) or its SPDXID.",
+  "tl4-ui-internal": ""
+}
