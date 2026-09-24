@@ -85,6 +85,18 @@ def get_cpe(external_refs: list[dict]) -> str:
     return "Not applicable***"
 
 
+def is_incomplete_dependency(pkg: dict) -> bool:
+    """
+    FOSSA emits placeholder packages (comment == "Incomplete dependency",
+    downloadLocation/versionInfo both "NOASSERTION") for URLs it couldn't
+    fully resolve. These duplicate a real package entry that already
+    carries the actual version info (e.g. the JRE/MongoDB zip is described
+    both by a proper package and by one of these placeholders sharing the
+    same file name) and must be excluded from the SBOM output.
+    """
+    return pkg.get("comment") == "Incomplete dependency"
+
+
 def extract_version_from_download_url(pkg: dict) -> str | None:
     """
     For packages with no purl (direct binary/URL downloads, e.g. a JRE or
@@ -171,6 +183,7 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
     author_of_sbom = f"{org} / {tool}" if tool else org
 
     packages = sbom.get("packages", [])
+    packages = [pkg for pkg in packages if not is_incomplete_dependency(pkg)]
 
     # Derive product info from SBOM if not overridden
     resolved_name = product_name or sbom.get("name", "Unknown Product")

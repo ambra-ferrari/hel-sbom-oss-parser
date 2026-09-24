@@ -5,7 +5,28 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sbom_to_excel import extract_version_from_download_url, load_version_overrides
+from sbom_to_excel import extract_version_from_download_url, load_version_overrides, is_incomplete_dependency
+
+
+def test_flags_fossa_incomplete_dependency_placeholder():
+    pkg = {
+        "name": "https://download.bell-sw.com/java/17.0.19+11/bellsoft-jre17.0.19+11-windows-amd64.zip",
+        "versionInfo": "NOASSERTION",
+        "downloadLocation": "NOASSERTION",
+        "comment": "Incomplete dependency",
+        "supplier": "Organization: Global URL",
+    }
+    assert is_incomplete_dependency(pkg) is True
+
+
+def test_does_not_flag_a_real_package_as_incomplete():
+    pkg = {
+        "name": "bellsoft-jre17.0.19+11-windows-amd64.zip",
+        "versionInfo": "7d23ca5a9128444155ccaf6756d71b4d",
+        "downloadLocation": "https://download.bell-sw.com/java/17.0.19+11/bellsoft-jre17.0.19+11-windows-amd64.zip",
+        "supplier": "Organization: FOSSA (Global URL)",
+    }
+    assert is_incomplete_dependency(pkg) is False
 
 
 def test_extracts_version_with_plus_suffix_from_jre_url():
