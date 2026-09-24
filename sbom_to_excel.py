@@ -152,7 +152,10 @@ def copy_row_style(ws, src_row: int, dst_row: int, num_cols: int):
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def build_excel(sbom_path: str, template_path: str, output_path: str,
-                product_name: str | None, product_version: str | None):
+                product_name: str | None, product_version: str | None,
+                version_overrides_path: str | None = None):
+
+    version_overrides = load_version_overrides(version_overrides_path)
 
     # ── load SBOM ──
     with open(sbom_path, encoding="utf-8") as f:
@@ -209,6 +212,10 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
         if "/" in name:
             name = name.rsplit("/", 1)[-1]
         version = pkg.get("versionInfo", "")
+        extracted_version = extract_version_from_download_url(pkg)
+        if extracted_version:
+            version = extracted_version
+        version = version_overrides.get(spdx_id, version_overrides.get(name, version))
         supplier_raw = pkg.get("supplier", "NOASSERTION")
         originator_raw = pkg.get("originator", "NOASSERTION")
         external_refs = pkg.get("externalRefs", [])
@@ -269,6 +276,12 @@ def main():
     parser.add_argument("--output", required=True, help="Path for the output Excel file (.xlsx)")
     parser.add_argument("--product-name", default=None, help="Override product name in the header")
     parser.add_argument("--product-version", default=None, help="Override product version in the header")
+    parser.add_argument(
+        "--version-overrides", default=None,
+        help="Path to a JSON file of {package name or SPDXID: real version} "
+             "to use instead of the SPDX versionInfo (e.g. for packages "
+             "whose version is a commit SHA)."
+    )
 
     args = parser.parse_args()
 
@@ -278,6 +291,7 @@ def main():
         output_path=args.output,
         product_name=args.product_name,
         product_version=args.product_version,
+        version_overrides_path=args.version_overrides,
     )
 
 
