@@ -41,6 +41,8 @@ from sbom_lib import (
     extract_version_from_download_url,
     strip_v_prefix,
     load_version_overrides,
+    canonical_component_name,
+    load_component_aliases,
     copy_row_style,
 )
 
@@ -150,11 +152,14 @@ def parse_iso_date(date_str: str) -> datetime:
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def build_excel(sbom_path: str, template_path: str, output_path: str,
-                product_name: str | None, product_version: str | None,
+                product_name: str | None = None,
+                product_version: str | None = None,
                 version_overrides_path: str | None = None,
+                component_aliases_path: str | None = None,
                 eol_data_path: str | None = None):
 
     version_overrides = load_version_overrides(version_overrides_path)
+    aliases = load_component_aliases(component_aliases_path)
     eol_map = load_eol_map(eol_data_path)
 
     # ── load SBOM ──
@@ -215,8 +220,11 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
     for pkg in packages:
         if not is_first_party(pkg):
             continue
-        nm = resolve_component_name(
-            pkg.get("name", ""), get_cpe(pkg.get("externalRefs", []) or [])
+        nm = canonical_component_name(
+            resolve_component_name(
+                pkg.get("name", ""), get_cpe(pkg.get("externalRefs", []) or [])
+            ),
+            aliases,
         )
         if ":" in nm:
             continue
@@ -244,6 +252,7 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
 
         first_party = is_first_party(pkg)
         if first_party:
+            name = canonical_component_name(name, aliases)
             end_of_support = "N/A - Internally Developed"
             level_of_support = "Maintained"
             category = "First-Party"
@@ -311,6 +320,12 @@ def main():
              "whose version is a commit SHA)."
     )
     parser.add_argument(
+        "--component-aliases", default=None,
+        help="Path to a JSON file of {alternate first-party name: canonical "
+             "hel-* name} to collapse the two representations of the same "
+             "internal component into one row."
+    )
+    parser.add_argument(
         "--eol-data", default=None,
         help="Path to eol_data.json (from enrich_eol.py) mapping package "
              "SPDXID to an end-of-support date; missing entries fall back to N/A*."
@@ -325,6 +340,7 @@ def main():
         product_name=args.product_name,
         product_version=args.product_version,
         version_overrides_path=args.version_overrides,
+        component_aliases_path=args.component_aliases,
         eol_data_path=args.eol_data,
     )
 

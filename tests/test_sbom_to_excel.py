@@ -321,3 +321,24 @@ def test_build_excel_applies_eol_date(tmp_path):
     assert rows["react"] == "2026-04-30"                     # resolved OSS
     assert rows["leftpad"] == "N/A*"                         # unresolved OSS
     assert rows["hel-thing"] == "N/A - Internally Developed" # first-party
+
+
+def test_build_excel_collapses_aliased_first_party_twins(tmp_path):
+    packages = [
+        {"SPDXID": "SPDXRef-hel", "name": "hel-app",
+         "versionInfo": "1.15.6", "supplier": "Organization: Baxter",
+         "externalRefs": []},
+        {"SPDXID": "SPDXRef-mvn", "name": "biz.videomed.tl4.installer:tl4-app-external",
+         "versionInfo": "1.15.6", "supplier": "Organization: Maven",
+         "externalRefs": []},
+    ]
+    sbom = _write_sbom(tmp_path, packages)
+    aliases_path = tmp_path / "aliases.json"
+    aliases_path.write_text(json_module.dumps({"tl4-app-external": "hel-app"}))
+    out = tmp_path / "out.xlsx"
+    build_excel(sbom, TEMPLATE, str(out), component_aliases_path=str(aliases_path))
+
+    rows = _read_data_rows(str(out))
+    names = [r[1] for r in rows]  # column B = name
+    assert names.count("hel-app") == 1
+    assert not any(n and "tl4-app-external" in n for n in names)
