@@ -129,6 +129,59 @@ def load_reference_overrides(path: str | None) -> dict[str, str]:
     return _override_field_map(path, "reference")
 
 
+def _short_artifact_name(name: str) -> str:
+    """Last path segment of a package name: the part after the final ':' or '/'.
+
+    'biz.videomed.tl4.installer:tl4-app-external' -> 'tl4-app-external'
+    'github.com/golang-jwt/jwt/v5'               -> 'v5'
+    'hel-app'                                     -> 'hel-app'
+    """
+    seg = (name or "").strip()
+    for sep in (":", "/"):
+        if sep in seg:
+            seg = seg.rsplit(sep, 1)[-1]
+    return seg
+
+
+def load_component_aliases(path: str | None) -> dict[str, str]:
+    """Load a curated {alias short-name: canonical name} map.
+
+    JSON shape: {"<alias>": "<canonical>", ...}. Keys are lowercased/stripped
+    for case-insensitive matching against a package's short artifact name.
+    Returns {} when no path is given or the file is absent — the alias map is
+    optional and the parser stays fully offline. Exits with a clear error if a
+    given path is not valid JSON, so a typo can't be silently ignored.
+    """
+    if not path or not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as exc:
+            sys.exit(f"component-aliases file is not valid JSON: {path} ({exc})")
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(k).strip().lower(): str(v).strip()
+        for k, v in data.items()
+        if str(k).strip() and str(v).strip()
+    }
+
+
+def canonical_component_name(name: str, aliases: dict[str, str]) -> str:
+    """Canonical internal-component name for `name`.
+
+    Looks up the package's short artifact name (case-insensitive) in the curated
+    alias map and returns the mapped canonical name; unmapped names are returned
+    unchanged. Collapses the two representations of the same first-party
+    component (e.g. 'biz.videomed…:tl4-app-external' and 'hel-app').
+    """
+    if not aliases:
+        return name
+    key = _short_artifact_name(name).lower()
+    return aliases.get(key, name)
+
+
 def is_incomplete_dependency(pkg: dict) -> bool:
     """
     FOSSA emits placeholder packages (comment == "Incomplete dependency",
