@@ -360,6 +360,33 @@ def test_build_components_returns_first_party_packages_sorted_by_name():
     assert components[0]["version"] == "1.0"
 
 
+def test_build_components_collapses_aliased_first_party_twins():
+    from sbom_to_oss_dependencies import build_components
+    packages = [
+        {"SPDXID": "SPDXRef-hel", "name": "hel-app",
+         "versionInfo": "1.15.6", "supplier": "Organization: Baxter"},
+        {"SPDXID": "SPDXRef-mvn", "name": "biz.videomed.tl4.installer:tl4-app-external",
+         "versionInfo": "1.15.6", "supplier": "Organization: Maven"},
+    ]
+    aliases = {"tl4-app-external": "hel-app"}
+    components = build_components(packages, {}, aliases)
+    names = [c["name"] for c in components]
+    assert names == ["hel-app"]
+    assert len(components) == 1
+
+
+def test_build_components_no_aliases_keeps_both():
+    from sbom_to_oss_dependencies import build_components
+    packages = [
+        {"SPDXID": "SPDXRef-hel", "name": "hel-app",
+         "versionInfo": "1.15.6", "supplier": "Organization: Baxter"},
+        {"SPDXID": "SPDXRef-mvn", "name": "biz.videomed.tl4.installer:tl4-app-external",
+         "versionInfo": "1.15.6", "supplier": "Organization: Maven"},
+    ]
+    components = build_components(packages, {})
+    assert len(components) == 2
+
+
 def test_build_excel_writes_expected_sheet_dimensions_and_content(tmp_path):
     packages = [
         {"SPDXID": "SPDXRef-comp-a", "name": "19518/helion/app-a", "versionInfo": "1.0",

@@ -31,6 +31,8 @@ from sbom_lib import (
     is_first_party,
     resolve_version,
     load_version_overrides,
+    canonical_component_name,
+    load_component_aliases,
     load_license_overrides,
     load_purpose_overrides,
     load_reference_overrides,
@@ -221,14 +223,27 @@ def flag_review_rows(rows: list[dict]) -> list[dict]:
     return flagged
 
 
-def build_components(packages: list[dict], version_overrides: dict) -> list[dict]:
-    """Internal Helion components for the 'SW-SYS Components (Ref-only)' sheet,
-    sorted by name."""
-    components = [
-        {"name": pkg.get("name", ""), "version": resolve_version(pkg, version_overrides)}
-        for pkg in packages
-        if is_first_party(pkg)
-    ]
+def build_components(packages: list[dict], version_overrides: dict,
+                     aliases: dict[str, str] | None = None) -> list[dict]:
+    """Internal Helion components for the 'SW-SYS Components (Ref-only)' sheet.
+
+    Names are resolved to their canonical form via the curated alias map so the
+    two representations of the same first-party component collapse to one row.
+    Deduplicated by (canonical name, version), sorted by name.
+    """
+    aliases = aliases or {}
+    seen: set[tuple[str, str]] = set()
+    components: list[dict] = []
+    for pkg in packages:
+        if not is_first_party(pkg):
+            continue
+        name = canonical_component_name(pkg.get("name", ""), aliases)
+        version = resolve_version(pkg, version_overrides)
+        key = (name.lower(), version)
+        if key in seen:
+            continue
+        seen.add(key)
+        components.append({"name": name, "version": version})
     components.sort(key=lambda c: c["name"].lower())
     return components
 
