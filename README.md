@@ -164,6 +164,7 @@ python3 src/sbom_to_excel.py \
     [--product-name "My Product"] \
     [--product-version "1.2.3"] \
     [--version-overrides config/version-overrides.json] \
+    [--component-aliases config/component_aliases.json] \
     [--eol-data outputs/eol_data.json]
 ```
 
@@ -175,6 +176,7 @@ python3 src/sbom_to_excel.py \
 | `--product-name` | no | Override the product name shown in the header |
 | `--product-version` | no | Override the product version shown in the header |
 | `--version-overrides` | no | Path to a JSON file of manual version overrides (see below) |
+| `--component-aliases` | no | Path to a JSON file of curated first-party component aliases (see `config/component_aliases.json`) that collapse the same internal component's two names into one canonical row |
 | `--eol-data` | no | Path to `eol_data.json` (from `enrich_eol.py`) to fill the end-of-support column |
 
 ### Manual version overrides
@@ -193,6 +195,27 @@ version. See `config/version-overrides.example.json` for the format:
 Pass it with `--version-overrides path/to/overrides.json`. The tool exits
 with a clear error (instead of silently ignoring it) if the file is missing
 or not valid JSON.
+
+### Curated component aliases (`config/component_aliases.json`)
+
+Some internal (first-party) components appear in the SBOM twice under two
+different names for the SAME component — e.g. a Maven coordinate
+(`biz.videomed.tl4.installer:tl4-app-external`) and a friendly project-root
+name (`hel-app`) — with no derivable relationship between the two names. This
+curated file maps the alternate name (matched on its short artifact name,
+case-insensitive) to the canonical `hel-*` name so both representations
+collapse into one row:
+
+```json
+{
+  "tl4-app-external": "hel-app",
+  "tl4-app-print-helper": "hel-app-print-helper"
+}
+```
+
+Pass it with `--component-aliases config/component_aliases.json`. Optional —
+omitting it leaves both names as separate rows. Used identically by
+`sbom_to_excel.py` and `sbom_to_oss_dependencies.py`.
 
 ---
 
@@ -317,7 +340,8 @@ python3 src/sbom_to_oss_dependencies.py \
     --output outputs/output-oss-dependencies.xlsx \
     [--product-name "Helion System"] \
     [--version-overrides config/version-overrides.json] \
-    [--license-overrides config/license_overrides.json]
+    [--license-overrides config/license_overrides.json] \
+    [--component-aliases config/component_aliases.json]
 ```
 
 | Flag | Required | Description |
@@ -328,6 +352,7 @@ python3 src/sbom_to_oss_dependencies.py \
 | `--product-name` | no | Product name shown in the components sheet title (defaults to the SBOM's own `name` field) |
 | `--version-overrides` | no | Path to a JSON file of manual version overrides (same format as `sbom_to_excel.py` — see above) |
 | `--license-overrides` | no | Path to a JSON file of curated SPDX license overrides (see `config/license_overrides.json`) |
+| `--component-aliases` | no | Path to a JSON file of curated first-party component aliases (see `config/component_aliases.json`) that collapse the same internal component's two names into one canonical row |
 
 ---
 
