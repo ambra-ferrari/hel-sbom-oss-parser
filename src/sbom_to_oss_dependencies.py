@@ -144,7 +144,8 @@ def resolve_purpose(pkg: dict, purpose_overrides: dict | None = None) -> str:
 def build_rows(packages: list[dict], relationships: list[dict], version_overrides: dict,
                license_overrides: dict | None = None,
                purpose_overrides: dict | None = None,
-               reference_overrides: dict | None = None):
+               reference_overrides: dict | None = None,
+               aliases: dict[str, str] | None = None):
     """Build one output row per unique OSS package (name + version).
 
     Returns (rows, placeholders_dropped, duplicates_merged):
@@ -158,6 +159,7 @@ def build_rows(packages: list[dict], relationships: list[dict], version_override
     """
     pkg_to_components = build_component_graph(packages, relationships)
     pkgs_by_id = {pkg["SPDXID"]: pkg for pkg in packages}
+    aliases = aliases or {}
 
     placeholders_dropped = sum(1 for pkg in packages if is_incomplete_dependency(pkg))
 
@@ -177,7 +179,8 @@ def build_rows(packages: list[dict], relationships: list[dict], version_override
 
         component_ids = pkg_to_components.get(pkg["SPDXID"], set())
         component_names = {
-            pkgs_by_id[c]["name"] for c in component_ids if c in pkgs_by_id
+            canonical_component_name(pkgs_by_id[c]["name"], aliases)
+            for c in component_ids if c in pkgs_by_id
         }
 
         if key in rows_by_key:

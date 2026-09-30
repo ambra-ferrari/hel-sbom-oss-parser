@@ -282,6 +282,31 @@ def test_build_rows_joins_multiple_components_for_shared_package():
     assert merged == 0
 
 
+def test_build_rows_components_column_uses_canonical_names():
+    from sbom_to_oss_dependencies import build_rows
+    packages = [
+        {"SPDXID": "SPDXRef-hel", "name": "hel-app",
+         "versionInfo": "1.15.6", "supplier": "Organization: Baxter"},
+        {"SPDXID": "SPDXRef-mvn", "name": "biz.videomed.tl4.installer:tl4-app-external",
+         "versionInfo": "1.15.6", "supplier": "Organization: Maven"},
+        {"SPDXID": "SPDXRef-oss", "name": "left-pad", "versionInfo": "1.0.0",
+         "supplier": "Organization: npm", "licenseDeclared": "MIT",
+         "externalRefs": [{"referenceType": "purl",
+                           "referenceLocator": "pkg:npm/left-pad@1.0.0"}]},
+    ]
+    # Both first-party twins depend on the OSS package.
+    relationships = [
+        {"spdxElementId": "SPDXRef-oss", "relationshipType": "DEPENDENCY_OF",
+         "relatedSpdxElement": "SPDXRef-hel"},
+        {"spdxElementId": "SPDXRef-oss", "relationshipType": "DEPENDENCY_OF",
+         "relatedSpdxElement": "SPDXRef-mvn"},
+    ]
+    aliases = {"tl4-app-external": "hel-app"}
+    rows, _, _ = build_rows(packages, relationships, {}, aliases=aliases)
+    oss_row = next(r for r in rows if r["name"] == "left-pad")
+    assert oss_row["components"] == "hel-app"
+
+
 def test_build_rows_merges_genuine_duplicate_name_version():
     packages = [
         {"SPDXID": "SPDXRef-comp-a", "name": "19518/helion/app-a", "versionInfo": "1.0",
