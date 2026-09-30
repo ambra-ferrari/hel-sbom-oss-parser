@@ -1,0 +1,9 @@
+{
+  "overrides": [
+    {
+      "name": "Keycloak",
+      "date": "2027-03-31",
+      "reason": "Fine supporto major 26 (roadmap interna)"
+    }
+  ]
+}

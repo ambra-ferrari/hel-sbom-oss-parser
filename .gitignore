@@ -1,0 +1,23 @@
+# --- Generated deliverables & sample data (kept out of git) ---
+outputs/*
+inputs/*
+docs/*
+
+# --- FOSSA API key (never commit) ---
+.fossa.secret
+
+# --- Local handoff notes (not for git) ---
+HANDOFF.md
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+build/
+dist/
+
+# --- Editor / OS cruft ---
+~$*
+.DS_Store

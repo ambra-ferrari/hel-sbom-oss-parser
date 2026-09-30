@@ -1,0 +1,30 @@
+{
+  "overrides": [
+    {"name": "org.nginx:nginx-windows", "license": "BSD-2-Clause", "source": "https://nginx.org/LICENSE", "purpose": "HTTP server and reverse proxy (nginx)", "reference": "website=https://nginx.org/"},
+    {"name": "org.postgresql:postgresql-windows", "license": "PostgreSQL", "source": "https://www.postgresql.org/about/licence/", "purpose": "PostgreSQL: relational database management system", "reference": "website=https://www.postgresql.org/"},
+    {"name": "org.mongo:mongodb-windows", "license": "SSPL-1.0", "source": "https://github.com/mongodb/mongo/blob/master/LICENSE-Community.txt", "purpose": "MongoDB Community Server: document-oriented NoSQL database", "reference": "website=https://www.mongodb.com/"},
+    {"name": "org.mongo:mongodb-database-tools-windows", "license": "Apache-2.0", "source": "https://github.com/mongodb/mongo-tools/blob/master/LICENSE.md", "purpose": "MongoDB command-line database tools (mongodump, mongorestore, etc.)", "reference": "website=https://www.mongodb.com/docs/database-tools/"},
+    {"name": "ffmpeg", "license": "LGPL-2.1-or-later", "source": "https://ffmpeg.org/legal.html", "note": "Default build; verify configure flags (--enable-gpl/--enable-nonfree change this).", "purpose": "Multimedia framework: record, convert and stream audio and video (FFmpeg)", "reference": "website=https://ffmpeg.org/"},
+    {"name": "com.bellswjdk.hotspot:jre", "license": "GPL-2.0-only WITH Classpath-exception-2.0", "source": "https://openjdk.org/legal/gplv2+ce.html", "purpose": "BellSoft Liberica JRE: Java runtime environment (OpenJDK build)", "reference": "website=https://bell-sw.com/libericajdk/"},
+    {"name": "cc.nssm:nssm", "license": "LicenseRef-Public-Domain", "source": "https://nssm.cc/", "note": "Public domain per bundled README; no exact SPDX id.", "purpose": "Windows service manager: runs applications/executables as Windows services", "reference": "website=https://nssm.cc/"},
+    {"name": "BouncyCastle.NetCore", "license": "MIT", "source": "https://www.bouncycastle.org/licence.html", "note": "Bouncy Castle (MIT/X11-style) license; unofficial repackage of bc-csharp."},
+    {"name": "MediaInfo.Wrapper", "license": "BSD-2-Clause", "source": "https://github.com/MediaArea/MediaInfo"},
+    {"name": "TSS.MSR", "license": "MIT", "source": "https://github.com/microsoft/TSS.MSR/blob/main/LICENSE"},
+    {"name": "com.github.cplussharp:graphstudionext", "license": "GPL-3.0-only", "source": "https://raw.githubusercontent.com/cplussharp/graph-studio-next/master/GPL.txt", "purpose": "DirectShow filter graph editor and analysis tool", "reference": "website=https://github.com/cplussharp/graph-studio-next"},
+    {"name": "FTD2XX.Net", "license": "LicenseRef-FTDI-FTD2XX", "source": "https://ftdichip.com/document/ftd2xx-net-installation-license-terms/", "note": "Corrects FOSSA file-scan false positive (GPL-1.0-only). Custom FTDI permissive-with-field-of-use license."},
+
+    {"name": "dcm4che", "purpose": "DICOM implementation in Java for healthcare imaging (dcm4che)", "reference": "website=https://www.dcm4che.org/"},
+    {"name": "dcmtk", "purpose": "DICOM toolkit: libraries and applications for the DICOM medical imaging standard (DCMTK)", "reference": "website=https://dicom.offis.de/dcmtk"},
+    {"name": "github.com/kjk/dailyrotate", "purpose": "Go library for writing to log files rotated daily"},
+    {"name": "github.com/kjk/u", "purpose": "Go utility/helper library"},
+
+    {"name": "Passay Core", "license": "Apache-2.0", "source": "dual-license choice", "note": "Original: LGPL-3.0-only OR Apache-2.0. Chosen permissive branch Apache-2.0."},
+    {"name": "lodash", "license": "MIT", "source": "dual-license choice", "note": "Original: MIT OR CC0-1.0. Chosen MIT."},
+    {"name": "lodash-es", "license": "MIT", "source": "dual-license choice", "note": "Original: MIT OR CC0-1.0. Chosen MIT."},
+    {"name": "NDesk.Options", "license": "MIT", "source": "dual-license choice", "note": "Original: MIT OR CC-BY-4.0. Chosen MIT."},
+    {"name": "pako", "license": "MIT", "source": "dual-license choice", "note": "Original: MIT OR Zlib. Chosen MIT."},
+    {"name": "Jakarta Servlet API", "license": "EPL-2.0", "source": "dual-license choice", "note": "Original: GPL-2.0-only WITH Classpath-exception-2.0 OR EPL-2.0. Chosen EPL-2.0 (non-GPL branch)."},
+    {"name": "javax.annotation API", "license": "CDDL-1.1", "source": "dual-license choice", "note": "Original: GPL-2.0-only WITH Classpath-exception-2.0 OR CDDL-1.1. Chosen CDDL-1.1 (non-GPL branch)."},
+    {"name": "Old JAXB Core", "license": "CDDL-1.0", "source": "dual-license choice", "note": "Original: GPL-2.0-only WITH Classpath-exception-2.0 OR CDDL-1.0. Chosen CDDL-1.0 (non-GPL branch)."}
+  ]
+}

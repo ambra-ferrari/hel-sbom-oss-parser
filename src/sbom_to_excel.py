@@ -25,9 +25,7 @@ Usage:
 import argparse
 import json
 import os
-import re
 import sys
-from copy import copy
 from datetime import datetime, timezone
 
 try:
@@ -35,6 +33,16 @@ try:
     from openpyxl.styles import PatternFill, Font, Border, Alignment
 except ImportError:
     sys.exit("Missing dependency: pip install openpyxl")
+
+from sbom_lib import (
+    is_incomplete_dependency,
+    is_first_party,
+    resolve_version,
+    extract_version_from_download_url,
+    strip_v_prefix,
+    load_version_overrides,
+    copy_row_style,
+)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -85,58 +93,49 @@ def get_cpe(external_refs: list[dict]) -> str:
     return "Not applicable***"
 
 
-def is_incomplete_dependency(pkg: dict) -> bool:
+def resolve_component_name(name: str, coordinate: str) -> str:
+    """Return the full SPDX package name (no truncation).
+
+    The FOSSA name is already full and descriptive (e.g. 'Apache Commons Lang',
+    'github.com/golang-jwt/jwt/v5', '@angular/core'). Fall back to the CPE
+    coordinate only when the name is empty.
     """
-    FOSSA emits placeholder packages (comment == "Incomplete dependency",
-    downloadLocation/versionInfo both "NOASSERTION") for URLs it couldn't
-    fully resolve. These duplicate a real package entry that already
-    carries the actual version info (e.g. the JRE/MongoDB zip is described
-    both by a proper package and by one of these placeholders sharing the
-    same file name) and must be excluded from the SBOM output.
-    """
-    return pkg.get("comment") == "Incomplete dependency"
+    name = (name or "").strip()
+    if name:
+        return name
+    return (coordinate or "").strip()
 
 
-def extract_version_from_download_url(pkg: dict) -> str | None:
+def first_party_artifact_key(name: str) -> str:
+    """Normalized artifact identity for a Baxter/first-party component name.
+
+    Links the two representations of the same internal library:
+      - project-root name 'hel-<artifact>'    -> '<artifact>'
+      - Maven coordinate '<group>:<artifact>' -> '<artifact>'
+    Comparison is case-insensitive.
     """
-    For packages with no purl (direct binary/URL downloads, e.g. a JRE or
-    MongoDB zip), the SPDX `versionInfo` is often a checksum or
-    `NOASSERTION` because there's no package-manager version. The real
-    version is usually embedded in the download URL/filename — extract it
-    from there. Returns None if the package has a purl (has a real
-    package-manager version already) or if no version-like pattern is found.
-    """
-    if pkg.get("externalRefs"):
-        return None
-    download_location = pkg.get("downloadLocation")
-    if not download_location or download_location == "NOASSERTION":
-        return None
-    matches = re.findall(r"\d+\.\d+\.\d+(?:\+\d+)?", download_location)
-    return matches[-1] if matches else None
+    if ":" in name:
+        art = name.rsplit(":", 1)[-1]
+    elif name.lower().startswith("hel-"):
+        art = name[len("hel-"):]
+    else:
+        art = name
+    return art.strip().lower()
 
 
-def load_version_overrides(path: str | None) -> dict[str, str]:
+def load_eol_map(path: str | None) -> dict[str, str]:
+    """Load the {SPDXID: "YYYY-MM-DD"} end-of-support cache from enrich_eol.
+
+    Returns {} when no path is given or the file is absent — the enrichment
+    step is optional and the parser stays fully offline. The cache's top-level
+    'eol' object holds the map.
     """
-    Load a manual version-override map from a JSON file of
-    {"<package name or SPDXID>": "<real version>"}. Returns {} if no path is
-    given. Exits with a clear error if the path doesn't exist or isn't valid
-    JSON — silent fallback would hide a typo in the file path.
-    """
-    if not path:
+    if not path or not os.path.isfile(path):
         return {}
-    if not os.path.isfile(path):
-        sys.exit(f"version-overrides file not found: {path}")
     with open(path, encoding="utf-8") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError as exc:
-            sys.exit(f"version-overrides file is not valid JSON: {path} ({exc})")
-
-
-def is_first_party(supplier: str) -> bool:
-    """Internally-developed components are tagged by the scanner with a
-    distinctive supplier marker (no real publisher/registry backs them)."""
-    return "custom (provided build)" in (supplier or "").lower()
+        data = json.load(f)
+    eol = data.get("eol", {}) if isinstance(data, dict) else {}
+    return eol if isinstance(eol, dict) else {}
 
 
 def parse_iso_date(date_str: str) -> datetime:
@@ -148,26 +147,15 @@ def parse_iso_date(date_str: str) -> datetime:
         return datetime.now()
 
 
-def copy_row_style(ws, src_row: int, dst_row: int, num_cols: int):
-    """Copy cell styles (fill, font, border, alignment, number_format) from one row to another."""
-    for col in range(1, num_cols + 1):
-        src = ws.cell(src_row, col)
-        dst = ws.cell(dst_row, col)
-        if src.has_style:
-            dst.font = copy(src.font)
-            dst.fill = copy(src.fill)
-            dst.border = copy(src.border)
-            dst.alignment = copy(src.alignment)
-            dst.number_format = src.number_format
-
-
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def build_excel(sbom_path: str, template_path: str, output_path: str,
                 product_name: str | None, product_version: str | None,
-                version_overrides_path: str | None = None):
+                version_overrides_path: str | None = None,
+                eol_data_path: str | None = None):
 
     version_overrides = load_version_overrides(version_overrides_path)
+    eol_map = load_eol_map(eol_data_path)
 
     # ── load SBOM ──
     with open(sbom_path, encoding="utf-8") as f:
@@ -214,46 +202,73 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
 
     # Internally-developed (First-Party) components listed first, then OSS —
     # stable sort preserves original relative ordering within each group.
-    packages = sorted(packages, key=lambda pkg: not is_first_party(pkg.get("supplier", "NOASSERTION")))
+    packages = sorted(packages, key=lambda pkg: not is_first_party(pkg))
 
     # ── write package rows ──
+    # A Baxter library appears twice under different names: as a friendly
+    # 'hel-*' project root (the "principal" row) and as its 'group:artifact'
+    # Maven twin. Pre-compute the (artifact, version) of every principal row
+    # (first-party, non-coordinate name) so the coordinate twin can be dropped
+    # while leaving the principal row untouched. Orphan coordinates (no
+    # principal twin) are never removed.
+    principal_fp_artifacts: set[tuple[str, str]] = set()
+    for pkg in packages:
+        if not is_first_party(pkg):
+            continue
+        nm = resolve_component_name(
+            pkg.get("name", ""), get_cpe(pkg.get("externalRefs", []) or [])
+        )
+        if ":" in nm:
+            continue
+        principal_fp_artifacts.add(
+            (first_party_artifact_key(nm), resolve_version(pkg, version_overrides))
+        )
+
+    seen_rows: set[tuple[str, str]] = set()
     row_idx = data_start_row
     for pkg in packages:
-        spdx_id = pkg.get("SPDXID", "")
-        name = pkg.get("name", "")
-        # Keep only the last segment if the name is a path (e.g. "19518/gitlab.../nms-broker")
-        if "/" in name:
-            name = name.rsplit("/", 1)[-1]
-        version = pkg.get("versionInfo", "")
-        extracted_version = extract_version_from_download_url(pkg)
-        if extracted_version:
-            version = extracted_version
-        version = version_overrides.get(spdx_id, version_overrides.get(name, version))
+        raw_name = pkg.get("name", "")
+        version = resolve_version(pkg, version_overrides)
         supplier_raw = pkg.get("supplier", "NOASSERTION")
         originator_raw = pkg.get("originator", "NOASSERTION")
         external_refs = pkg.get("externalRefs", [])
 
         supplier_name = extract_supplier_name(supplier_raw, originator_raw)
         cpe = get_cpe(external_refs)
+        name = resolve_component_name(raw_name, cpe)
         # All components in this SBOM are declared directly by one of the
         # product manifests (verified via the SPDX DEPENDS_ON relationships:
         # every real component is a direct dependant of a product root, with
         # no intermediate transitive chain recorded) — so every row is Direct.
         dep_rel = "Direct"
 
-        first_party = is_first_party(supplier_raw)
+        first_party = is_first_party(pkg)
         if first_party:
             end_of_support = "N/A - Internally Developed"
             level_of_support = "Maintained"
             category = "First-Party"
             comment = "Own development"
             supplier_name = "Baxter"
+            # First-party (Baxter) components are not tracked by CPE.
+            cpe = "Not applicable***"
         else:
-            end_of_support = "N/A*"
+            end_of_support = eol_map.get(pkg.get("SPDXID", ""), "N/A*")
             level_of_support = "Supported"
             category = "OSS"
             comment = "OSS Community Development"
             supplier_name = "OSS Community"
+
+        dedup_key = (name.lower(), version)
+        if dedup_key in seen_rows:
+            continue
+        seen_rows.add(dedup_key)
+
+        # Drop a first-party Maven-coordinate row when its principal twin
+        # (same artifact + version, friendly non-coordinate name) is present.
+        if first_party and ":" in name and (
+            (first_party_artifact_key(name), version) in principal_fp_artifacts
+        ):
+            continue
 
         # Copy styles from the template reference row
         if row_idx > data_start_row:
@@ -295,6 +310,11 @@ def main():
              "to use instead of the SPDX versionInfo (e.g. for packages "
              "whose version is a commit SHA)."
     )
+    parser.add_argument(
+        "--eol-data", default=None,
+        help="Path to eol_data.json (from enrich_eol.py) mapping package "
+             "SPDXID to an end-of-support date; missing entries fall back to N/A*."
+    )
 
     args = parser.parse_args()
 
@@ -305,6 +325,7 @@ def main():
         product_name=args.product_name,
         product_version=args.product_version,
         version_overrides_path=args.version_overrides,
+        eol_data_path=args.eol_data,
     )
 
 
