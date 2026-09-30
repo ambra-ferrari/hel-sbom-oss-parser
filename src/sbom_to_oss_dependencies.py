@@ -333,11 +333,13 @@ def write_components_sheet(wb, components: list[dict], product_name: str):
 def build_excel(sbom_path: str, template_path: str, output_path: str,
                  product_name: str | None = None,
                  version_overrides_path: str | None = None,
-                 license_overrides_path: str | None = None):
+                 license_overrides_path: str | None = None,
+                 component_aliases_path: str | None = None):
     version_overrides = load_version_overrides(version_overrides_path)
     license_overrides = load_license_overrides(license_overrides_path)
     purpose_overrides = load_purpose_overrides(license_overrides_path)
     reference_overrides = load_reference_overrides(license_overrides_path)
+    aliases = load_component_aliases(component_aliases_path)
 
     with open(sbom_path, encoding="utf-8") as f:
         sbom = json.load(f)
@@ -348,9 +350,10 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
 
     rows, placeholders_dropped, duplicates_merged = build_rows(
         packages, relationships, version_overrides,
-        license_overrides, purpose_overrides, reference_overrides
+        license_overrides, purpose_overrides, reference_overrides,
+        aliases=aliases,
     )
-    components = build_components(packages, version_overrides)
+    components = build_components(packages, version_overrides, aliases)
 
     unknown_licenses = sum(1 for row in rows if row["license"] == "UNKNOWN - Review Required")
     fallback_licenses = sum(1 for row in rows if "(derived from file scan" in row["license"])
@@ -396,6 +399,12 @@ def main():
         help="Path to a JSON file of curated {package name: SPDX license} overrides "
              "(e.g. license_overrides.json) for external binaries FOSSA can't resolve."
     )
+    parser.add_argument(
+        "--component-aliases", default=None,
+        help="Path to a JSON file of {alternate first-party name: canonical "
+             "hel-* name} (e.g. component_aliases.json) to collapse the two "
+             "representations of the same internal component into one row."
+    )
     args = parser.parse_args()
 
     build_excel(
@@ -405,6 +414,7 @@ def main():
         product_name=args.product_name,
         version_overrides_path=args.version_overrides,
         license_overrides_path=args.license_overrides,
+        component_aliases_path=args.component_aliases,
     )
 
 

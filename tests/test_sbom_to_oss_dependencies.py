@@ -447,3 +447,24 @@ def test_build_excel_writes_expected_sheet_dimensions_and_content(tmp_path):
     assert ws2.cell(3, 1).value == "19518/helion/app-a"
     assert ws2.cell(3, 2).value == "1.0"
     assert "Test Product" in ws2.cell(1, 1).value
+
+
+def test_build_excel_end_to_end_collapses_twins_in_components_sheet(tmp_path):
+    from sbom_to_oss_dependencies import build_excel
+    packages = [
+        {"SPDXID": "SPDXRef-hel", "name": "hel-app",
+         "versionInfo": "1.15.6", "supplier": "Organization: Baxter"},
+        {"SPDXID": "SPDXRef-mvn", "name": "biz.videomed.tl4.installer:tl4-app-external",
+         "versionInfo": "1.15.6", "supplier": "Organization: Maven"},
+    ]
+    sbom = _write_sbom(tmp_path, packages)
+    aliases_path = tmp_path / "aliases.json"
+    aliases_path.write_text(json_module.dumps({"tl4-app-external": "hel-app"}))
+    out = tmp_path / "out.xlsx"
+    build_excel(sbom, OSS_TEMPLATE, str(out), component_aliases_path=str(aliases_path))
+
+    wb = _openpyxl.load_workbook(str(out))
+    ws = wb["SW-SYS Components (Ref-only)"]
+    names = [ws.cell(r, 1).value for r in range(3, ws.max_row + 1)
+             if ws.cell(r, 1).value]
+    assert names == ["hel-app"]
