@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from sbom_lib import (
     canonical_component_name,
     load_component_aliases,
+    normalize_purpose_text,
 )
 
 ALIASES = {
@@ -48,3 +49,27 @@ def test_load_component_aliases_lowercases_keys(tmp_path):
     p.write_text(json.dumps({"TL4-App-External": "hel-app", " tl4-x ": " hel-x "}))
     result = load_component_aliases(str(p))
     assert result == {"tl4-app-external": "hel-app", "tl4-x": "hel-x"}
+
+
+# ── normalize_purpose_text ───────────────────────────────────────────────────
+
+def test_normalize_purpose_strips_leading_and_trailing_whitespace():
+    assert normalize_purpose_text("\n    Guava is a suite\n  ") == "Guava is a suite"
+
+
+def test_normalize_purpose_strips_leading_emoji():
+    assert normalize_purpose_text("👻 Primitive and flexible state management") == \
+        "Primitive and flexible state management"
+
+
+def test_normalize_purpose_strips_emoji_anywhere_in_text():
+    assert normalize_purpose_text("Does things 🎉 well 🚀") == "Does things well"
+
+
+def test_normalize_purpose_passthrough_for_clean_text():
+    assert normalize_purpose_text("Does things") == "Does things"
+
+
+def test_normalize_purpose_handles_empty_and_none():
+    assert normalize_purpose_text("") == ""
+    assert normalize_purpose_text(None) == ""

@@ -75,6 +75,34 @@ def normalize_license(expr):
     return " ".join(out)
 
 
+_EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"  # pictographs, emoticons, transport/map, supplemental, extended-A
+    "\U00002600-\U000026FF"  # misc symbols
+    "\U00002700-\U000027BF"  # dingbats
+    "\U0001F1E6-\U0001F1FF"  # regional indicator (flag) letters
+    "\uFE0F"                  # variation selector-16 (emoji presentation)
+    "\u200d"                  # zero-width joiner (emoji sequences)
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def normalize_purpose_text(text: str | None) -> str:
+    """Clean up a package's "Purpose" text for the OSS deps deliverable.
+
+    Removes emoji/pictograph characters (some upstream package summaries lead
+    with a decorative emoji) and strips useless leading/trailing whitespace
+    (including the newlines + indentation some SBOM summaries carry from
+    multi-line source doc-comments). Returns "" for falsy input.
+    """
+    if not text:
+        return ""
+    cleaned = _EMOJI_PATTERN.sub(" ", text)
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    return cleaned.strip()
+
+
 def load_package_overrides(path: str | None) -> dict[str, dict]:
     """Load curated per-package overrides, keyed by normalized name.
 

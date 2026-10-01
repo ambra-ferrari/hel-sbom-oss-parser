@@ -37,6 +37,7 @@ from sbom_lib import (
     load_purpose_overrides,
     load_reference_overrides,
     normalize_license,
+    normalize_purpose_text,
     copy_row_style,
 )
 
@@ -128,15 +129,17 @@ def resolve_purl(pkg: dict) -> str:
 
 def resolve_purpose(pkg: dict, purpose_overrides: dict | None = None) -> str:
     """Curated override (by package name) wins; else the package summary,
-    blanked when SPDX has no real value for it."""
+    blanked when SPDX has no real value for it. The result is normalized
+    (see `normalize_purpose_text`) to strip stray leading/trailing
+    whitespace and decorative emoji some upstream summaries carry."""
     purpose_overrides = purpose_overrides or {}
     name = (pkg.get("name") or "").strip().lower()
     if name in purpose_overrides:
-        return purpose_overrides[name]
+        return normalize_purpose_text(purpose_overrides[name])
     summary = pkg.get("summary")
     if not summary or summary == "NOASSERTION":
         return ""
-    return summary
+    return normalize_purpose_text(summary)
 
 
 # ── row assembly ──────────────────────────────────────────────────────────────

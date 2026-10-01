@@ -215,6 +215,16 @@ def test_resolve_purpose_blanks_noassertion():
     assert resolve_purpose({}) == ""
 
 
+def test_resolve_purpose_strips_leading_whitespace_from_summary():
+    pkg = {"summary": "\n    Guava is a suite\n  "}
+    assert resolve_purpose(pkg) == "Guava is a suite"
+
+
+def test_resolve_purpose_strips_emoji_from_summary():
+    pkg = {"summary": "👻 Primitive and flexible state management"}
+    assert resolve_purpose(pkg) == "Primitive and flexible state management"
+
+
 # ── purpose / reference overrides ────────────────────────────────────────────
 
 from sbom_lib import load_package_overrides, load_purpose_overrides, load_reference_overrides
