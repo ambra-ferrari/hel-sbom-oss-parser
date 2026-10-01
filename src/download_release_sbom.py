@@ -198,7 +198,7 @@ DEFAULT_TEST_PATTERNS = [
     r"testify", r"testcontainers", r"junit", r"mockito", r"hamcrest",
     r"assertj", r"testng", r"mockk", r"\bjest\b", r"\bmocha\b", r"\bchai\b",
     r"\bsinon\b", r"enzyme", r"cypress", r"jasmine", r"\bkarma\b",
-    r"pytest", r"jacoco", r"serialtest", r"systemtest",
+    r"pytest", r"jacoco",
 ]
 
 
