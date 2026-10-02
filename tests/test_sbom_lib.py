@@ -9,8 +9,11 @@ from sbom_lib import (
     canonical_component_name,
     dedupe_first_party_packages,
     first_party_artifact_key,
+    is_excluded_component,
     load_component_aliases,
+    load_excluded_components,
     normalize_purpose_text,
+    remove_excluded_packages,
 )
 
 ALIASES = {
@@ -250,3 +253,86 @@ def test_dedupe_ignores_oss_packages():
     ])
     out = dedupe_first_party_packages(spdx)
     assert len(out["packages"]) == 2
+
+
+# ── excluded components ───────────────────────────────────────────────────────
+
+EXCLUDED = {"licensing": "test exclusion", "license-parser": "test exclusion"}
+
+
+def test_load_excluded_components_lowercases_keys(tmp_path):
+    p = tmp_path / "excluded.json"
+    p.write_text(json.dumps({"Licensing": "reason", "License-Parser": "reason"}))
+    excluded = load_excluded_components(str(p))
+    assert excluded == {"licensing": "reason", "license-parser": "reason"}
+
+
+def test_load_excluded_components_missing_path_returns_empty():
+    assert load_excluded_components(None) == {}
+    assert load_excluded_components("/no/such/file.json") == {}
+
+
+def test_is_excluded_component_matches_maven_coordinate():
+    assert is_excluded_component("biz.videomed:licensing", EXCLUDED) is True
+
+
+def test_is_excluded_component_matches_bare_name_case_insensitively():
+    assert is_excluded_component("LICENSING", EXCLUDED) is True
+
+
+def test_is_excluded_component_false_for_unlisted_name():
+    assert is_excluded_component("hel-app", EXCLUDED) is False
+
+
+def test_is_excluded_component_false_when_no_excluded_map():
+    assert is_excluded_component("biz.videomed:licensing", {}) is False
+
+
+def test_remove_excluded_packages_drops_matching_package():
+    spdx = _spdx([
+        {"SPDXID": "SPDXRef-lic", "name": "biz.videomed:licensing",
+         "versionInfo": "0.6.8", "supplier": "Organization: Maven"},
+        {"SPDXID": "SPDXRef-hel", "name": "hel-app",
+         "versionInfo": "1.0", "supplier": "Organization: Baxter"},
+    ])
+    out = remove_excluded_packages(spdx, EXCLUDED)
+    names = [p["name"] for p in out["packages"]]
+    assert names == ["hel-app"]
+
+
+def test_remove_excluded_packages_drops_its_relationships():
+    spdx = _spdx(
+        [
+            {"SPDXID": "SPDXRef-lic", "name": "biz.videomed:licensing",
+             "versionInfo": "0.6.8", "supplier": "Organization: Maven"},
+            {"SPDXID": "SPDXRef-backend", "name": "hel-backend",
+             "versionInfo": "1.0", "supplier": "Organization: Baxter"},
+        ],
+        [
+            {"spdxElementId": "SPDXRef-backend", "relationshipType": "DEPENDS_ON",
+             "relatedSpdxElement": "SPDXRef-lic"},
+            {"spdxElementId": "SPDXRef-lic", "relationshipType": "DEPENDENCY_OF",
+             "relatedSpdxElement": "SPDXRef-backend"},
+        ],
+    )
+    out = remove_excluded_packages(spdx, EXCLUDED)
+    assert out["relationships"] == []
+    assert [p["name"] for p in out["packages"]] == ["hel-backend"]
+
+
+def test_remove_excluded_packages_no_excluded_map_is_noop():
+    spdx = _spdx([
+        {"SPDXID": "SPDXRef-lic", "name": "biz.videomed:licensing",
+         "versionInfo": "0.6.8", "supplier": "Organization: Maven"},
+    ])
+    out = remove_excluded_packages(spdx, {})
+    assert len(out["packages"]) == 1
+
+
+def test_remove_excluded_packages_does_not_mutate_input():
+    spdx = _spdx([
+        {"SPDXID": "SPDXRef-lic", "name": "biz.videomed:licensing",
+         "versionInfo": "0.6.8", "supplier": "Organization: Maven"},
+    ])
+    remove_excluded_packages(spdx, EXCLUDED)
+    assert len(spdx["packages"]) == 1

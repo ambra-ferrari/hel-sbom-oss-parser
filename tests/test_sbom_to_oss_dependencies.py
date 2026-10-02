@@ -493,3 +493,24 @@ def test_build_excel_end_to_end_collapses_twins_in_components_sheet(tmp_path):
     names = [ws.cell(r, 1).value for r in range(3, ws.max_row + 1)
              if ws.cell(r, 1).value]
     assert names == ["hel-app"]
+
+
+def test_build_excel_drops_explicitly_excluded_components(tmp_path):
+    from sbom_to_oss_dependencies import build_excel
+    packages = [
+        {"SPDXID": "SPDXRef-hel", "name": "hel-app",
+         "versionInfo": "1.15.6", "supplier": "Organization: Baxter"},
+        {"SPDXID": "SPDXRef-lic", "name": "biz.videomed:licensing",
+         "versionInfo": "0.6.8", "supplier": "Organization: Maven"},
+    ]
+    sbom = _write_sbom(tmp_path, packages)
+    excluded_path = tmp_path / "excluded.json"
+    excluded_path.write_text(json_module.dumps({"licensing": "test"}))
+    out = tmp_path / "out.xlsx"
+    build_excel(sbom, OSS_TEMPLATE, str(out), excluded_components_path=str(excluded_path))
+
+    wb = _openpyxl.load_workbook(str(out))
+    ws = wb["SW-SYS Components (Ref-only)"]
+    names = [ws.cell(r, 1).value for r in range(3, ws.max_row + 1)
+             if ws.cell(r, 1).value]
+    assert names == ["hel-app"]

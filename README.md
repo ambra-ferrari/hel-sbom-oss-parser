@@ -165,6 +165,7 @@ python3 src/sbom_to_excel.py \
     [--product-version "1.2.3"] \
     [--version-overrides config/version-overrides.json] \
     [--component-aliases config/component_aliases.json] \
+    [--excluded-components config/excluded_components.json] \
     [--eol-data outputs/eol_data.json]
 ```
 
@@ -177,6 +178,7 @@ python3 src/sbom_to_excel.py \
 | `--product-version` | no | Override the product version shown in the header |
 | `--version-overrides` | no | Path to a JSON file of manual version overrides (see below) |
 | `--component-aliases` | no | Path to a JSON file of curated first-party component aliases (see `config/component_aliases.json`) that collapse the same internal component's two names into one canonical row |
+| `--excluded-components` | no | Path to a JSON file of curated component exclusions (see `config/excluded_components.json`) for components that must never appear in the output |
 | `--eol-data` | no | Path to `eol_data.json` (from `enrich_eol.py`) to fill the end-of-support column |
 
 ### Manual version overrides
@@ -216,6 +218,27 @@ collapse into one row:
 Pass it with `--component-aliases config/component_aliases.json`. Optional —
 omitting it leaves both names as separate rows. Used identically by
 `sbom_to_excel.py` and `sbom_to_oss_dependencies.py`.
+
+### Curated component exclusions (`config/excluded_components.json`)
+
+Some components must never appear in the output at all (e.g. internal
+tooling that isn't meant to be reported as a tracked component). This
+curated file maps the component's short artifact name (case-insensitive) to
+a free-text reason; matching packages are dropped entirely — not just
+deduped — from every generated deliverable:
+
+```json
+{
+  "licensing": "Explicitly excluded per request — internal licensing helper not meant to be reported as a tracked component.",
+  "license-parser": "Explicitly excluded per request — internal licensing helper not meant to be reported as a tracked component."
+}
+```
+
+Pass it with `--excluded-components config/excluded_components.json`.
+Optional — omitting it changes nothing. Used identically by
+`sbom_to_excel.py`, `sbom_to_oss_dependencies.py`, and
+`normalize_sbom_aliases.py` (which also drops any relationship referencing
+the excluded package from the normalized SPDX JSON).
 
 ---
 
@@ -341,7 +364,8 @@ python3 src/sbom_to_oss_dependencies.py \
     [--product-name "Helion System"] \
     [--version-overrides config/version-overrides.json] \
     [--license-overrides config/license_overrides.json] \
-    [--component-aliases config/component_aliases.json]
+    [--component-aliases config/component_aliases.json] \
+    [--excluded-components config/excluded_components.json]
 ```
 
 | Flag | Required | Description |
@@ -353,6 +377,7 @@ python3 src/sbom_to_oss_dependencies.py \
 | `--version-overrides` | no | Path to a JSON file of manual version overrides (same format as `sbom_to_excel.py` — see above) |
 | `--license-overrides` | no | Path to a JSON file of curated SPDX license overrides (see `config/license_overrides.json`) |
 | `--component-aliases` | no | Path to a JSON file of curated first-party component aliases (see `config/component_aliases.json`) that collapse the same internal component's two names into one canonical row |
+| `--excluded-components` | no | Path to a JSON file of curated component exclusions (see `config/excluded_components.json`) for components that must never appear in the output |
 
 ---
 

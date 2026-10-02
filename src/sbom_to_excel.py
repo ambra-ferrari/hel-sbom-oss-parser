@@ -37,12 +37,14 @@ except ImportError:
 from sbom_lib import (
     is_incomplete_dependency,
     is_first_party,
+    is_excluded_component,
     resolve_version,
     extract_version_from_download_url,
     strip_v_prefix,
     load_version_overrides,
     canonical_component_name,
     load_component_aliases,
+    load_excluded_components,
     first_party_artifact_key,
     copy_row_style,
 )
@@ -140,11 +142,13 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
                 product_version: str | None = None,
                 version_overrides_path: str | None = None,
                 component_aliases_path: str | None = None,
-                eol_data_path: str | None = None):
+                eol_data_path: str | None = None,
+                excluded_components_path: str | None = None):
 
     version_overrides = load_version_overrides(version_overrides_path)
     aliases = load_component_aliases(component_aliases_path)
     eol_map = load_eol_map(eol_data_path)
+    excluded = load_excluded_components(excluded_components_path)
 
     # ── load SBOM ──
     with open(sbom_path, encoding="utf-8") as f:
@@ -161,6 +165,7 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
 
     packages = sbom.get("packages", [])
     packages = [pkg for pkg in packages if not is_incomplete_dependency(pkg)]
+    packages = [pkg for pkg in packages if not is_excluded_component(pkg.get("name", ""), excluded)]
 
     # Derive product info from SBOM if not overridden
     resolved_name = product_name or sbom.get("name", "Unknown Product")
@@ -314,6 +319,12 @@ def main():
         help="Path to eol_data.json (from enrich_eol.py) mapping package "
              "SPDXID to an end-of-support date; missing entries fall back to N/A*."
     )
+    parser.add_argument(
+        "--excluded-components", default=None,
+        help="Path to a JSON file of {short artifact name: reason} (e.g. "
+             "excluded_components.json) for components that must never "
+             "appear in the output, regardless of party/version."
+    )
 
     args = parser.parse_args()
 
@@ -326,6 +337,7 @@ def main():
         version_overrides_path=args.version_overrides,
         component_aliases_path=args.component_aliases,
         eol_data_path=args.eol_data,
+        excluded_components_path=args.excluded_components,
     )
 
 

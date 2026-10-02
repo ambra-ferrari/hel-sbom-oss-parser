@@ -29,11 +29,13 @@ except ImportError:
 from sbom_lib import (
     is_incomplete_dependency,
     is_first_party,
+    is_excluded_component,
     resolve_version,
     load_version_overrides,
     canonical_component_name,
     first_party_artifact_key,
     load_component_aliases,
+    load_excluded_components,
     load_license_overrides,
     load_purpose_overrides,
     load_reference_overrides,
@@ -348,17 +350,20 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
                  product_name: str | None = None,
                  version_overrides_path: str | None = None,
                  license_overrides_path: str | None = None,
-                 component_aliases_path: str | None = None):
+                 component_aliases_path: str | None = None,
+                 excluded_components_path: str | None = None):
     version_overrides = load_version_overrides(version_overrides_path)
     license_overrides = load_license_overrides(license_overrides_path)
     purpose_overrides = load_purpose_overrides(license_overrides_path)
     reference_overrides = load_reference_overrides(license_overrides_path)
     aliases = load_component_aliases(component_aliases_path)
+    excluded = load_excluded_components(excluded_components_path)
 
     with open(sbom_path, encoding="utf-8") as f:
         sbom = json.load(f)
 
     packages = sbom.get("packages", [])
+    packages = [pkg for pkg in packages if not is_excluded_component(pkg.get("name", ""), excluded)]
     relationships = sbom.get("relationships", [])
     resolved_name = product_name or sbom.get("name", "Unknown Product")
 
@@ -419,6 +424,12 @@ def main():
              "hel-* name} (e.g. component_aliases.json) to collapse the two "
              "representations of the same internal component into one row."
     )
+    parser.add_argument(
+        "--excluded-components", default=None,
+        help="Path to a JSON file of {short artifact name: reason} (e.g. "
+             "excluded_components.json) for components that must never "
+             "appear in the output, regardless of party/version."
+    )
     args = parser.parse_args()
 
     build_excel(
@@ -429,6 +440,7 @@ def main():
         version_overrides_path=args.version_overrides,
         license_overrides_path=args.license_overrides,
         component_aliases_path=args.component_aliases,
+        excluded_components_path=args.excluded_components,
     )
 
 

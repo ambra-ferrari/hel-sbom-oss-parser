@@ -11,7 +11,12 @@ writes a new SPDX JSON where:
     'hel-*' counterpart (no alias entry needed) are DROPPED — not renamed —
     keeping only the 'hel-*' package, consistent with the Components sheet
     dedup in sbom_to_oss_dependencies.py. Relationships pointing at a dropped
-    package are repointed to the surviving 'hel-*' package.
+    package are repointed to the surviving 'hel-*' package;
+  - components matching a curated entry in the excluded-components map
+    (config/excluded_components.json) are removed entirely, along with every
+    relationship that references them — used to scrub components that must
+    never appear in the machine-readable SBOM (e.g. internal tooling never
+    meant to be reported).
 
 The raw input file is left untouched; this writes a separate output file
 (e.g. for inclusion in the machine-readable SBOM deliverable) so the FOSSA
@@ -26,7 +31,13 @@ import json
 import sys
 from pathlib import Path
 
-from sbom_lib import apply_component_aliases, dedupe_first_party_packages, load_component_aliases
+from sbom_lib import (
+    apply_component_aliases,
+    dedupe_first_party_packages,
+    load_component_aliases,
+    load_excluded_components,
+    remove_excluded_packages,
+)
 
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
@@ -44,6 +55,8 @@ def main() -> None:
                     help="Path to the raw SPDX 2.3 JSON SBOM (left untouched)")
     ap.add_argument("--component-aliases", default=cfg.get("OSS_COMPONENT_ALIASES"),
                     help="Path to the curated component-alias JSON map")
+    ap.add_argument("--excluded-components", default=cfg.get("OSS_EXCLUDED_COMPONENTS"),
+                    help="Path to the curated excluded-components JSON map")
     ap.add_argument("--output", required=True,
                     help="Path to write the canonicalized SPDX JSON to")
     args = ap.parse_args()
@@ -52,8 +65,11 @@ def main() -> None:
         spdx = json.load(f)
 
     aliases = load_component_aliases(args.component_aliases)
+    excluded = load_excluded_components(args.excluded_components)
+
     aliased = apply_component_aliases(spdx, aliases)
-    out = dedupe_first_party_packages(aliased)
+    deduped = dedupe_first_party_packages(aliased)
+    out = remove_excluded_packages(deduped, excluded)
 
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)
@@ -66,7 +82,7 @@ def main() -> None:
     )
     removed = len(spdx.get("packages", []) or []) - len(out.get("packages", []) or [])
     print(f"✅  Canonicalized {renamed} first-party package name(s), "
-          f"removed {removed} duplicate(s) → {args.output}")
+          f"removed {removed} duplicate/excluded package(s) → {args.output}")
 
 
 if __name__ == "__main__":

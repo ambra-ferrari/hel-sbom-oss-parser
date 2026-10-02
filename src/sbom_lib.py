@@ -6,6 +6,7 @@ These are pure functions with no knowledge of any particular xlsx template;
 they only understand SPDX 2.3 JSON package dicts.
 """
 
+import collections
 import json
 import os
 import re
@@ -337,6 +338,155 @@ def dedupe_first_party_packages(spdx: dict) -> dict:
         new_relationships.append(rel)
     out["relationships"] = new_relationships
     return out
+
+
+def load_excluded_components(path: str | None) -> dict[str, str]:
+    """Load the curated {short artifact name: reason} map of explicitly-excluded
+    components (config/excluded_components.json).
+
+    Keys are the package's short artifact name (last segment after ':' or
+    '/'), lowercased/stripped for case-insensitive matching — mirroring
+    `load_component_aliases`. Returns {} when no path is given or the file is
+    absent. Exits with a clear error if a given path is not valid JSON.
+    """
+    if not path or not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as exc:
+            sys.exit(f"excluded-components file is not valid JSON: {path} ({exc})")
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(k).strip().lower(): str(v).strip()
+        for k, v in data.items()
+        if str(k).strip()
+    }
+
+
+def is_excluded_component(name: str, excluded: dict[str, str]) -> bool:
+    """True if `name`'s short artifact id matches a curated exclusion entry."""
+    if not excluded:
+        return False
+    return _short_artifact_name(name).lower() in excluded
+
+
+def remove_excluded_packages(spdx: dict, excluded: dict[str, str]) -> dict:
+    """Return a copy of an SPDX doc with explicitly-excluded packages dropped.
+
+    Packages matching a curated entry in `excluded` (see
+    `load_excluded_components`) are removed entirely, along with every
+    relationship that references them (either side) — there is no survivor to
+    redirect to, unlike `dedupe_first_party_packages`. Used to scrub
+    components that must not appear in the machine-readable SBOM at all (e.g.
+    internal tooling never meant to be reported). The input doc is not
+    mutated; a no-op when `excluded` is empty.
+    """
+    packages = spdx.get("packages", []) or []
+    if not excluded:
+        return dict(spdx)
+
+    remove_ids = {
+        pkg.get("SPDXID") for pkg in packages
+        if is_excluded_component(pkg.get("name", ""), excluded)
+    }
+
+    out = dict(spdx)
+    out["packages"] = [p for p in packages if p.get("SPDXID") not in remove_ids]
+    out["relationships"] = [
+        dict(rel) for rel in (spdx.get("relationships", []) or [])
+        if rel.get("spdxElementId") not in remove_ids
+        and rel.get("relatedSpdxElement") not in remove_ids
+    ]
+    return out
+
+
+def audit_spdx(spdx: dict, excluded: dict[str, str] | None = None) -> list[str]:
+    """Structural/consistency audit of an SPDX 2.3 JSON doc.
+
+    Returns a list of human-readable issue descriptions (empty = clean).
+    Codifies the machine-readable SBOM review checklist:
+      - required top-level fields present;
+      - every package has a non-empty name, SPDXID and versionInfo;
+      - SPDXIDs are unique;
+      - every relationship endpoint resolves to a known package or the
+        document itself (no dangling references);
+      - no relationship self-loops or exact-duplicate relationships;
+      - the number of DESCRIBES relationships matches the project count
+        parsed from the creationInfo comment, when present (aggregated
+        release exports only — best-effort, skipped if unparseable);
+      - purls (externalRefs of type 'purl') all start with 'pkg:';
+      - packages with filesAnalyzed=true declare at least one checksum;
+      - package names have no stray leading/trailing whitespace;
+      - none of `excluded`'s curated entries (see
+        `load_excluded_components`) are present in the package list.
+    """
+    issues: list[str] = []
+    excluded = excluded or {}
+
+    for field in ("spdxVersion", "dataLicense", "SPDXID", "name",
+                  "documentNamespace", "creationInfo", "packages", "relationships"):
+        if field not in spdx:
+            issues.append(f"missing top-level field: {field}")
+
+    packages = spdx.get("packages", []) or []
+    relationships = spdx.get("relationships", []) or []
+
+    ids = [p.get("SPDXID") for p in packages]
+    id_counts = collections.Counter(ids)
+    for spdxid, count in id_counts.items():
+        if count > 1:
+            issues.append(f"duplicate SPDXID: {spdxid} ({count}x)")
+
+    for p in packages:
+        name = p.get("name")
+        if not name:
+            issues.append(f"package missing name: SPDXID={p.get('SPDXID')}")
+        elif name != name.strip():
+            issues.append(f"package name has stray whitespace: {name!r}")
+        if not p.get("SPDXID"):
+            issues.append(f"package missing SPDXID: name={name!r}")
+        if not p.get("versionInfo"):
+            issues.append(f"package missing versionInfo: {name!r} ({p.get('SPDXID')})")
+        for ref in p.get("externalRefs", []) or []:
+            if ref.get("referenceType") == "purl":
+                locator = ref.get("referenceLocator", "")
+                if not locator.startswith("pkg:"):
+                    issues.append(f"malformed purl on {name!r}: {locator!r}")
+        if p.get("filesAnalyzed") and not p.get("checksums"):
+            issues.append(f"filesAnalyzed=true but no checksums: {name!r}")
+        if is_excluded_component(name or "", excluded):
+            issues.append(f"excluded component still present: {name!r} ({p.get('SPDXID')})")
+
+    doc_id = spdx.get("SPDXID")
+    known_ids = set(ids) | ({doc_id} if doc_id else set())
+    for rel in relationships:
+        a, b = rel.get("spdxElementId"), rel.get("relatedSpdxElement")
+        if a not in known_ids:
+            issues.append(f"dangling relationship endpoint: spdxElementId={a!r}")
+        if b not in known_ids and b != "NOASSERTION":
+            issues.append(f"dangling relationship endpoint: relatedSpdxElement={b!r}")
+        if a == b:
+            issues.append(f"relationship self-loop: {a!r}")
+
+    rel_keys = [tuple(sorted(r.items())) for r in relationships]
+    for key, count in collections.Counter(rel_keys).items():
+        if count > 1:
+            issues.append(f"duplicate relationship ({count}x): {dict(key)}")
+
+    describes_count = sum(1 for r in relationships if r.get("relationshipType") == "DESCRIBES")
+    comment = (spdx.get("creationInfo", {}) or {}).get("comment", "")
+    m = re.search(r"Aggregated from (\d+) FOSSA project", comment)
+    if m:
+        expected = int(m.group(1))
+        if describes_count != expected:
+            issues.append(
+                f"DESCRIBES count ({describes_count}) != project count in "
+                f"creationInfo comment ({expected})"
+            )
+
+    return issues
 
 
 def strip_v_prefix(version: str) -> str:

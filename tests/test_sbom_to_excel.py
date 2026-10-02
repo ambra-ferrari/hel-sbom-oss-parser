@@ -342,3 +342,24 @@ def test_build_excel_collapses_aliased_first_party_twins(tmp_path):
     names = [r[1] for r in rows]  # column B = name
     assert names.count("hel-app") == 1
     assert not any(n and "tl4-app-external" in n for n in names)
+
+
+def test_build_excel_drops_explicitly_excluded_components(tmp_path):
+    packages = [
+        {"SPDXID": "SPDXRef-hel", "name": "hel-app",
+         "versionInfo": "1.15.6", "supplier": "Organization: Baxter",
+         "externalRefs": []},
+        {"SPDXID": "SPDXRef-lic", "name": "biz.videomed:licensing",
+         "versionInfo": "0.6.8", "supplier": "Organization: Maven",
+         "externalRefs": []},
+    ]
+    sbom = _write_sbom(tmp_path, packages)
+    excluded_path = tmp_path / "excluded.json"
+    excluded_path.write_text(json_module.dumps({"licensing": "test"}))
+    out = tmp_path / "out.xlsx"
+    build_excel(sbom, TEMPLATE, str(out), excluded_components_path=str(excluded_path))
+
+    rows = _read_data_rows(str(out))
+    names = [r[1] for r in rows]
+    assert "hel-app" in names
+    assert not any(n and "licensing" in n.lower() for n in names)
