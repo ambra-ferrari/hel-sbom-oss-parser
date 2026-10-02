@@ -240,6 +240,26 @@ def is_first_party(pkg: dict) -> bool:
     return "biz.videomed" in haystack.lower()
 
 
+def apply_component_aliases(spdx: dict, aliases: dict[str, str]) -> dict:
+    """Return a copy of an SPDX doc with first-party package names canonicalized.
+
+    Renames each first-party package's `name` via `canonical_component_name`
+    so the raw SPDX JSON stays consistent with the generated Excel
+    deliverables (which already display the canonical `hel-*` name). OSS
+    (third-party) packages and all other top-level SPDX fields are left
+    untouched. The input doc is not mutated.
+    """
+    out = dict(spdx)
+    new_packages = []
+    for pkg in spdx.get("packages", []) or []:
+        pkg = dict(pkg)
+        if is_first_party(pkg):
+            pkg["name"] = canonical_component_name(pkg.get("name", ""), aliases)
+        new_packages.append(pkg)
+    out["packages"] = new_packages
+    return out
+
+
 def strip_v_prefix(version: str) -> str:
     """Drop a leading 'v' when immediately followed by a digit (e.g. 'v5.3.1' -> '5.3.1').
 
