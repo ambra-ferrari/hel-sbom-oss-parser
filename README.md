@@ -230,7 +230,8 @@ deduped — from every generated deliverable:
 ```json
 {
   "licensing": "Explicitly excluded per request — internal licensing helper not meant to be reported as a tracked component.",
-  "license-parser": "Explicitly excluded per request — internal licensing helper not meant to be reported as a tracked component."
+  "license-parser": "Explicitly excluded per request — internal licensing helper not meant to be reported as a tracked component. Kept as a safety-net alias in case a future SBOM pull uses this exact (singular) spelling.",
+  "licenses-parser": "Explicitly excluded per request — internal licensing helper not meant to be reported as a tracked component. Actual artifact name found in the SBOM as 'biz.videomed.util:licenses-parser' (plural)."
 }
 ```
 
