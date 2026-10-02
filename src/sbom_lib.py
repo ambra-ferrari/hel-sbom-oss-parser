@@ -402,6 +402,25 @@ def remove_excluded_packages(spdx: dict, excluded: dict[str, str]) -> dict:
     return out
 
 
+def set_document_name(spdx: dict, name: str | None) -> dict:
+    """Return a copy of an SPDX doc with its top-level `name` field overridden.
+
+    FOSSA/download_release_sbom.py derives the document `name` from the
+    release-group/release ids or titles (e.g. "561 / current (aggregated)"),
+    which isn't a meaningful product identifier for consumers of the
+    machine-readable SBOM. This lets callers pin a static, human-readable
+    name (e.g. "Truelink 4 (or Helion)/1.8.0") via config/CLI instead.
+
+    A no-op (returns a shallow copy unchanged) when `name` is falsy/None, so
+    omitting the override leaves the FOSSA-derived name untouched.
+    """
+    if not name:
+        return dict(spdx)
+    out = dict(spdx)
+    out["name"] = name
+    return out
+
+
 def audit_spdx(spdx: dict, excluded: dict[str, str] | None = None) -> list[str]:
     """Structural/consistency audit of an SPDX 2.3 JSON doc.
 

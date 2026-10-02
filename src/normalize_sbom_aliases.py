@@ -16,7 +16,12 @@ writes a new SPDX JSON where:
     (config/excluded_components.json) are removed entirely, along with every
     relationship that references them — used to scrub components that must
     never appear in the machine-readable SBOM (e.g. internal tooling never
-    meant to be reported).
+    meant to be reported);
+  - the document's top-level `name` is overridden with a static, configurable
+    value (OSS_SBOM_DOCUMENT_NAME in fossa.config, or --document-name), since
+    FOSSA derives it from the release-group/release ids/titles (e.g.
+    "561 / current (aggregated)"), which isn't a meaningful product name for
+    consumers of the machine-readable SBOM.
 
 The raw input file is left untouched; this writes a separate output file
 (e.g. for inclusion in the machine-readable SBOM deliverable) so the FOSSA
@@ -37,6 +42,7 @@ from sbom_lib import (
     load_component_aliases,
     load_excluded_components,
     remove_excluded_packages,
+    set_document_name,
 )
 
 HERE = Path(__file__).resolve().parent
@@ -57,6 +63,10 @@ def main() -> None:
                     help="Path to the curated component-alias JSON map")
     ap.add_argument("--excluded-components", default=cfg.get("OSS_EXCLUDED_COMPONENTS"),
                     help="Path to the curated excluded-components JSON map")
+    ap.add_argument("--document-name", default=cfg.get("OSS_SBOM_DOCUMENT_NAME"),
+                    help="Static name to set as the SPDX document's top-level "
+                         "'name' field, overriding the FOSSA-derived release "
+                         "name (e.g. 'Truelink 4 (or Helion)/1.8.0')")
     ap.add_argument("--output", required=True,
                     help="Path to write the canonicalized SPDX JSON to")
     args = ap.parse_args()
@@ -69,7 +79,8 @@ def main() -> None:
 
     aliased = apply_component_aliases(spdx, aliases)
     deduped = dedupe_first_party_packages(aliased)
-    out = remove_excluded_packages(deduped, excluded)
+    excluded_out = remove_excluded_packages(deduped, excluded)
+    out = set_document_name(excluded_out, args.document_name)
 
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)

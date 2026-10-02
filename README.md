@@ -241,6 +241,17 @@ Optional — omitting it changes nothing. Used identically by
 `normalize_sbom_aliases.py` (which also drops any relationship referencing
 the excluded package from the normalized SPDX JSON).
 
+### Static document name override (`normalize_sbom_aliases.py --document-name`)
+
+`normalize_sbom_aliases.py` (the script that writes the normalized SPDX JSON
+used in the machine-readable SBOM deliverable) also overrides the document's
+top-level `name` field with a static, configurable value, since FOSSA derives
+it from the release-group/release ids or titles (e.g.
+`"561 / current (aggregated)"`), which isn't a meaningful product name for
+consumers of the file. Configure it via `OSS_SBOM_DOCUMENT_NAME` in
+`fossa.config` (e.g. `"Truelink 4 (or Helion)/1.8.0"`) or override per-run
+with `--document-name`. Leave empty to keep the FOSSA-derived name as-is.
+
 ---
 
 ## `src/enrich_eol.py` — resolve end-of-support dates

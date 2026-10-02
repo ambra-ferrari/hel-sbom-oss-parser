@@ -14,6 +14,7 @@ from sbom_lib import (
     load_excluded_components,
     normalize_purpose_text,
     remove_excluded_packages,
+    set_document_name,
 )
 
 ALIASES = {
@@ -336,3 +337,21 @@ def test_remove_excluded_packages_does_not_mutate_input():
     ])
     remove_excluded_packages(spdx, EXCLUDED)
     assert len(spdx["packages"]) == 1
+
+
+def test_set_document_name_overrides_name():
+    spdx = {"name": "561 / current (aggregated)", "packages": [], "relationships": []}
+    out = set_document_name(spdx, "Truelink 4 (or Helion)/1.8.0")
+    assert out["name"] == "Truelink 4 (or Helion)/1.8.0"
+
+
+def test_set_document_name_does_not_mutate_input():
+    spdx = {"name": "561 / current (aggregated)", "packages": [], "relationships": []}
+    set_document_name(spdx, "Truelink 4 (or Helion)/1.8.0")
+    assert spdx["name"] == "561 / current (aggregated)"
+
+
+def test_set_document_name_noop_when_name_falsy():
+    spdx = {"name": "561 / current (aggregated)", "packages": [], "relationships": []}
+    assert set_document_name(spdx, None)["name"] == "561 / current (aggregated)"
+    assert set_document_name(spdx, "")["name"] == "561 / current (aggregated)"
