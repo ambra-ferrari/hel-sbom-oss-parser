@@ -279,6 +279,66 @@ def apply_component_aliases(spdx: dict, aliases: dict[str, str]) -> dict:
     return out
 
 
+def dedupe_first_party_packages(spdx: dict) -> dict:
+    """Return a copy of an SPDX doc with generic first-party name-twins removed.
+
+    Groups first-party packages by (first_party_artifact_key, version); for any
+    group containing a 'hel-*' named package alongside one or more non-'hel-*'
+    twins at the SAME version, drops the non-'hel-*' duplicates (no renaming —
+    the surviving package keeps its original name). Relationships referencing a
+    removed package are repointed to the surviving package's SPDXID; any
+    relationship that becomes a self-loop as a result (or an exact duplicate of
+    another relationship) is dropped. OSS packages, groups without a 'hel-*'
+    member, and groups whose versions differ are left untouched. The input doc
+    is not mutated.
+    """
+    packages = spdx.get("packages", []) or []
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for pkg in packages:
+        if not is_first_party(pkg):
+            continue
+        key = (first_party_artifact_key(pkg.get("name", "")), pkg.get("versionInfo", ""))
+        groups.setdefault(key, []).append(pkg)
+
+    redirect: dict[str, str] = {}
+    remove_ids: set[str] = set()
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        hel_members = [p for p in members if (p.get("name") or "").lower().startswith("hel-")]
+        if not hel_members:
+            continue
+        survivor_id = hel_members[0].get("SPDXID")
+        for p in members:
+            if p is hel_members[0]:
+                continue
+            pid = p.get("SPDXID")
+            if pid:
+                remove_ids.add(pid)
+                redirect[pid] = survivor_id
+
+    out = dict(spdx)
+    out["packages"] = [p for p in packages if p.get("SPDXID") not in remove_ids]
+
+    new_relationships = []
+    seen_relationships = set()
+    for rel in spdx.get("relationships", []) or []:
+        rel = dict(rel)
+        rel["spdxElementId"] = redirect.get(rel.get("spdxElementId"), rel.get("spdxElementId"))
+        rel["relatedSpdxElement"] = redirect.get(
+            rel.get("relatedSpdxElement"), rel.get("relatedSpdxElement")
+        )
+        if rel["spdxElementId"] == rel["relatedSpdxElement"]:
+            continue
+        dedupe_key = tuple(sorted(rel.items()))
+        if dedupe_key in seen_relationships:
+            continue
+        seen_relationships.add(dedupe_key)
+        new_relationships.append(rel)
+    out["relationships"] = new_relationships
+    return out
+
+
 def strip_v_prefix(version: str) -> str:
     """Drop a leading 'v' when immediately followed by a digit (e.g. 'v5.3.1' -> '5.3.1').
 

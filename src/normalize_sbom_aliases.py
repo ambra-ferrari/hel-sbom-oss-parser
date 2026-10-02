@@ -3,10 +3,15 @@
 
 Reads the raw aggregated SPDX JSON (as downloaded by download_release_sbom.py)
 and the curated component-alias map (config/component_aliases.json), and
-writes a new SPDX JSON where each first-party package's `name` is replaced by
-its canonical `hel-*` name — the same canonicalization already applied by
-sbom_to_excel.py and sbom_to_oss_dependencies.py when rendering the Excel
-deliverables.
+writes a new SPDX JSON where:
+  - each first-party package's `name` is replaced by its canonical `hel-*`
+    name for pairs curated in the alias map (same canonicalization already
+    applied by sbom_to_excel.py and sbom_to_oss_dependencies.py);
+  - first-party package twins sharing an artifact id and version with a
+    'hel-*' counterpart (no alias entry needed) are DROPPED — not renamed —
+    keeping only the 'hel-*' package, consistent with the Components sheet
+    dedup in sbom_to_oss_dependencies.py. Relationships pointing at a dropped
+    package are repointed to the surviving 'hel-*' package.
 
 The raw input file is left untouched; this writes a separate output file
 (e.g. for inclusion in the machine-readable SBOM deliverable) so the FOSSA
@@ -21,7 +26,7 @@ import json
 import sys
 from pathlib import Path
 
-from sbom_lib import apply_component_aliases, load_component_aliases
+from sbom_lib import apply_component_aliases, dedupe_first_party_packages, load_component_aliases
 
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
@@ -47,7 +52,8 @@ def main() -> None:
         spdx = json.load(f)
 
     aliases = load_component_aliases(args.component_aliases)
-    out = apply_component_aliases(spdx, aliases)
+    aliased = apply_component_aliases(spdx, aliases)
+    out = dedupe_first_party_packages(aliased)
 
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)
@@ -55,10 +61,12 @@ def main() -> None:
     renamed = sum(
         1 for old, new in zip(
             (p.get("name") for p in spdx.get("packages", []) or []),
-            (p.get("name") for p in out.get("packages", []) or []),
+            (p.get("name") for p in aliased.get("packages", []) or []),
         ) if old != new
     )
-    print(f"✅  Canonicalized {renamed} first-party package name(s) → {args.output}")
+    removed = len(spdx.get("packages", []) or []) - len(out.get("packages", []) or [])
+    print(f"✅  Canonicalized {renamed} first-party package name(s), "
+          f"removed {removed} duplicate(s) → {args.output}")
 
 
 if __name__ == "__main__":
