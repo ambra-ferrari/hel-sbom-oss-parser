@@ -43,6 +43,7 @@ from sbom_lib import (
     load_version_overrides,
     canonical_component_name,
     load_component_aliases,
+    first_party_artifact_key,
     copy_row_style,
 )
 
@@ -106,23 +107,6 @@ def resolve_component_name(name: str, coordinate: str) -> str:
     if name:
         return name
     return (coordinate or "").strip()
-
-
-def first_party_artifact_key(name: str) -> str:
-    """Normalized artifact identity for a Baxter/first-party component name.
-
-    Links the two representations of the same internal library:
-      - project-root name 'hel-<artifact>'    -> '<artifact>'
-      - Maven coordinate '<group>:<artifact>' -> '<artifact>'
-    Comparison is case-insensitive.
-    """
-    if ":" in name:
-        art = name.rsplit(":", 1)[-1]
-    elif name.lower().startswith("hel-"):
-        art = name[len("hel-"):]
-    else:
-        art = name
-    return art.strip().lower()
 
 
 def load_eol_map(path: str | None) -> dict[str, str]:

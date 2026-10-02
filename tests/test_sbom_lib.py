@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from sbom_lib import (
     apply_component_aliases,
     canonical_component_name,
+    first_party_artifact_key,
     load_component_aliases,
     normalize_purpose_text,
 )
@@ -125,3 +126,22 @@ def test_apply_component_aliases_preserves_other_top_level_fields():
     out = apply_component_aliases(spdx, ALIASES)
     assert out["spdxVersion"] == "SPDX-2.3"
     assert out["relationships"] == [{"a": 1}]
+
+
+# ── first_party_artifact_key ─────────────────────────────────────────────────
+
+def test_first_party_artifact_key_strips_hel_prefix():
+    assert first_party_artifact_key("hel-invalidated-tokens-api") == "invalidated-tokens-api"
+
+
+def test_first_party_artifact_key_takes_maven_artifact_id():
+    assert first_party_artifact_key("biz.videomed.tl4:invalidated-tokens-api") == \
+        "invalidated-tokens-api"
+
+
+def test_first_party_artifact_key_is_case_insensitive():
+    assert first_party_artifact_key("HEL-Foo") == first_party_artifact_key("group:Foo")
+
+
+def test_first_party_artifact_key_passthrough_for_plain_name():
+    assert first_party_artifact_key("some-plain-name") == "some-plain-name"

@@ -410,6 +410,21 @@ def test_build_components_collapses_aliased_first_party_twins():
     assert len(components) == 1
 
 
+def test_build_components_collapses_same_artifact_twins_without_alias():
+    """Pairs sharing an artifact id/version (e.g. nms-gateway-helper) must
+    collapse even when not in the curated alias map, preferring the 'hel-'
+    display name."""
+    from sbom_to_oss_dependencies import build_components
+    packages = [
+        {"SPDXID": "SPDXRef-mvn", "name": "biz.videomed.tl4.installer:nms-gateway-helper",
+         "versionInfo": "1.5.5", "supplier": "Organization: Maven"},
+        {"SPDXID": "SPDXRef-hel", "name": "hel-nms-gateway-helper",
+         "versionInfo": "1.5.5", "supplier": "Organization: Baxter"},
+    ]
+    components = build_components(packages, {})
+    assert [c["name"] for c in components] == ["hel-nms-gateway-helper"]
+
+
 def test_build_components_no_aliases_keeps_both():
     from sbom_to_oss_dependencies import build_components
     packages = [

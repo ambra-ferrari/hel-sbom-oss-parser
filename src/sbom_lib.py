@@ -210,6 +210,25 @@ def canonical_component_name(name: str, aliases: dict[str, str]) -> str:
     return aliases.get(key, name)
 
 
+def first_party_artifact_key(name: str) -> str:
+    """Case-insensitive grouping key for a first-party component name.
+
+    Strips the Maven group id (everything up to and including the last `:`)
+    or the `hel-` prefix, leaving the bare artifact id. Two spellings of the
+    same internal component that share this key and version (e.g.
+    'biz.videomed.tl4:invalidated-tokens-api' and 'hel-invalidated-tokens-api')
+    are the same artifact and should be treated as duplicates, independent of
+    any curated alias entry.
+    """
+    if ":" in name:
+        art = name.rsplit(":", 1)[-1]
+    elif name.lower().startswith("hel-"):
+        art = name[len("hel-"):]
+    else:
+        art = name
+    return art.strip().lower()
+
+
 def is_incomplete_dependency(pkg: dict) -> bool:
     """
     FOSSA emits placeholder packages (comment == "Incomplete dependency",

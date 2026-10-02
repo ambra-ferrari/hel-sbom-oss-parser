@@ -32,6 +32,7 @@ from sbom_lib import (
     resolve_version,
     load_version_overrides,
     canonical_component_name,
+    first_party_artifact_key,
     load_component_aliases,
     load_license_overrides,
     load_purpose_overrides,
@@ -233,23 +234,33 @@ def build_components(packages: list[dict], version_overrides: dict,
                      aliases: dict[str, str] | None = None) -> list[dict]:
     """Internal Helion components for the 'SW-SYS Components (Ref-only)' sheet.
 
-    Names are resolved to their canonical form via the curated alias map so the
-    two representations of the same first-party component collapse to one row.
-    Deduplicated by (canonical name, version), sorted by name.
+    Names are resolved to their canonical form via the curated alias map, then
+    grouped by (first_party_artifact_key, version) so the two representations
+    of the same first-party component collapse to one row even when they
+    aren't in the alias map (e.g. 'biz.videomed…:invalidated-tokens-api' and
+    'hel-invalidated-tokens-api' share the same artifact id and version).
+    Within a group, the 'hel-' name is preferred for display. Sorted by name.
     """
     aliases = aliases or {}
-    seen: set[tuple[str, str]] = set()
-    components: list[dict] = []
+    names_by_key: dict[tuple[str, str], list[str]] = {}
     for pkg in packages:
         if not is_first_party(pkg):
             continue
         name = canonical_component_name(pkg.get("name", ""), aliases)
         version = resolve_version(pkg, version_overrides)
-        key = (name.lower(), version)
-        if key in seen:
-            continue
-        seen.add(key)
-        components.append({"name": name, "version": version})
+        key = (first_party_artifact_key(name), version)
+        names_by_key.setdefault(key, []).append(name)
+
+    def preferred_name(names: list[str]) -> str:
+        for n in names:
+            if n.lower().startswith("hel-"):
+                return n
+        return names[0]
+
+    components = [
+        {"name": preferred_name(names), "version": key[1]}
+        for key, names in names_by_key.items()
+    ]
     components.sort(key=lambda c: c["name"].lower())
     return components
 
