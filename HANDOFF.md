@@ -28,19 +28,11 @@ retained. Config path resolution supports the source checkout and installed
 package data, with explicit errors for missing/invalid config files. The
 configuration is included in setuptools `data-files`.
 
-The last implementation subagent was interrupted by the session handoff
-request; its final quality review was therefore not completed. A spec review
-approved the implementation. A quality review before the final test
-normalization adjustment found no functional blocker after prior packaging and
-config-validation changes; it suggested confirming installed-wheel config
-lookup and retained a low-severity observation that the default-config
-integration test does not by itself prove behavior for caller-provided custom
-configuration. Earlier review comments about preserving an artifact set's
-case-insensitive behavior and validating config shape were addressed.
-
-The README has not yet been updated for this new classification rule or the
-new CLI flag. Finish this as the next step, then request a final quality review
-and run the real-output checks below.
+`README.md` was updated to explain the rule and the
+`--oss-deps-first-party-dependencies` option. Independent specification and
+code-quality reviews found no remaining blocking issues. The case-normalized
+explicit-set test, installed wheel content, full test suite, and actual
+workbook generated from the current SBOM were all verified.
 
 ## File Changes
 
@@ -50,7 +42,7 @@ and run the real-output checks below.
 | `src/sbom_to_oss_dependencies.py` | Modified | Adds config lookup/loading, exact case-insensitive artifact matching, both direct relationship orientations, optional API inputs, workbook classification, and CLI override `--oss-deps-first-party-dependencies`. |
 | `pyproject.toml` | Modified | Includes the new JSON configuration under `share/hel-sbom-oss-parser` data-files for wheel installs. |
 | `tests/test_sbom_to_oss_dependencies.py` | Modified | Adds config lookup/error tests, mixed-case matching test, explicit config override test, and workbook regression for all four artifacts including input SBOM immutability. |
-| `README.md` | Modified | Has pre-existing/earlier-session OSS-only exclusion documentation; still needs the first-party dependency classification docs and CLI flag. |
+| `README.md` | Modified | Has pre-existing/earlier-session OSS-only exclusion documentation plus the first-party dependency classification and CLI flag documentation. |
 | `tests/test_sbom_lib.py` | Modified | Has pre-existing/earlier-session coverage for general SBOM exclusions; not part of the new first-party classification feature. |
 | `config/oss_deps_excluded_components.json` | Untracked | Earlier user request: exclude `hel-invalidated-tokens-api` and `hel-nms-broker-api` and their Maven aliases from the OSS workbook only. |
 | `docs/superpowers/specs/2026-10-05-oss-dependency-first-party-classification-design.md` | Created, committed | Approved design for the workbook-only classification override. |
@@ -66,6 +58,7 @@ them and do not stage unrelated changes together with any future commit.
 
 Commits relevant to this session, newest first:
 
+- `b0b6c0d docs: add OSS classification handoff`
 - `6dd4128 docs: specify first-party dependency classification`
 - `e994ff5 feat: static configurable document name for normalized SPDX JSON`
 - `89f8bf3 docs: sync README excluded-components example with licenses-parser key`
@@ -73,8 +66,8 @@ Commits relevant to this session, newest first:
 - `295a8b1 fix: drop generic first-party name twins in normalized SPDX JSON`
 - `a52d128 fix: dedupe first-party component twins by artifact key in Components sheet`
 
-Only `6dd4128` was created during this classification request. All implementation
-changes remain unstaged/uncommitted on branch `main`.
+The design and handoff documents are committed. All implementation changes
+remain unstaged/uncommitted on branch `main`.
 
 ## Current Configuration
 
@@ -129,18 +122,22 @@ Fresh verification immediately before handoff:
 
 ```text
 /tmp/hel-sbom-validation-venv/bin/python -m pytest tests/ -q
-202 passed in 1.85s
+202 passed in 1.87s
 git diff --check
 passed
 ```
 
-The implementation subagent also reported a successful wheel build and
-confirmed the config JSON was present in the wheel's `.data/data/share/`
-directory. This was not independently rerun in the final handoff check.
+Real workbook generation from `inputs/sbom_new.json` verified that all four
+configured artifacts appear on `Dependencies (OTS SOUP)`, are attributed to
+`hel-tools`, and do not appear on `SW-SYS Components (Ref-only)`. The same four
+artifact IDs remain in `outputs/sbom_normalized.json`.
 
-The integration tests use small fixture SBOMs. A real-output verification
-against `inputs/sbom_new.json` and a final post-documentation quality review
-are still outstanding.
+The wheel was built with `pip wheel --no-deps --no-build-isolation`; archive
+inspection confirmed
+`hel_sbom_oss_parser-1.0.0.data/data/share/hel-sbom-oss-parser/oss_deps_first_party_dependencies.json`
+is packaged. A final independent code review found no Critical, Important, or
+Minor issues. Both config JSON files parsed successfully and
+`git diff --check` passed.
 
 ## Known Limitations
 
@@ -151,26 +148,10 @@ are still outstanding.
   incomplete-dependency placeholder chain behavior is retained in its
   established `DEPENDS_ON` orientation; inverse placeholder-chain traversal
   was not added.
-- A complete final quality review has not been performed after the latest
-  implementation/test changes.
 
 ## Next Steps
 
-1. Update `README.md` under the OSS-dependencies section with the new
-   classification rule, four artifact IDs, exact matching behavior, and the
-   `--oss-deps-first-party-dependencies` option.
-2. Review the complete implementation diff while separating it from older
-   OSS-exclusion changes already present in the worktree.
-3. Run the OSS-dependencies test module and full suite with the validation
-   environment.
-4. Generate the workbook from `inputs/sbom_new.json` to a temporary output,
-   verify the four rows are on `Dependencies (OTS SOUP)` with their real
-   dependent first-party components and absent from
-   `SW-SYS Components (Ref-only)`, and verify those packages remain in
-   `outputs/sbom_normalized.json`.
-5. Rebuild/inspect the wheel to verify the config file is packaged, then run a
-   final code-quality review.
-6. If committing the implementation, stage only feature-specific hunks/files;
+1. If committing the implementation, stage only feature-specific hunks/files;
    do not accidentally include older user changes in `README.md`,
    `src/sbom_to_oss_dependencies.py`, `tests/test_sbom_to_oss_dependencies.py`,
    `tests/test_sbom_lib.py`, or
