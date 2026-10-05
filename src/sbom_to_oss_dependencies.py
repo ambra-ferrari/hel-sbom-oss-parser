@@ -42,6 +42,7 @@ from sbom_lib import (
     load_license_overrides,
     load_purpose_overrides,
     load_reference_overrides,
+    load_vendor_overrides,
     normalize_license,
     normalize_purpose_text,
     copy_row_style,
@@ -251,7 +252,8 @@ def build_rows(packages: list[dict], relationships: list[dict], version_override
                purpose_overrides: dict | None = None,
                reference_overrides: dict | None = None,
                aliases: dict[str, str] | None = None,
-               first_party_dependency_ids: set[str] | None = None):
+               first_party_dependency_ids: set[str] | None = None,
+               vendor_overrides: dict[str, str] | None = None):
     """Build one output row per unique OSS package (name + version).
 
     Returns (rows, placeholders_dropped, duplicates_merged):
@@ -271,6 +273,7 @@ def build_rows(packages: list[dict], relationships: list[dict], version_override
     )
     pkgs_by_id = {pkg["SPDXID"]: pkg for pkg in packages}
     aliases = aliases or {}
+    vendor_overrides = vendor_overrides or {}
 
     placeholders_dropped = sum(1 for pkg in packages if is_incomplete_dependency(pkg))
 
@@ -304,6 +307,9 @@ def build_rows(packages: list[dict], relationships: list[dict], version_override
         rows_by_key[key] = {
             "name": name,
             "version": version,
+            "vendor": vendor_overrides.get(
+                (pkg.get("name") or "").strip().lower(), "Open Source"
+            ),
             "purpose": resolve_purpose(pkg, purpose_overrides),
             "license": resolve_license(pkg, license_overrides),
             "reference": resolve_reference(pkg, reference_overrides),
@@ -410,7 +416,7 @@ def write_oss_dependencies_sheet(wb, rows: list[dict]):
         ws.cell(r, 1).value = row["name"]
         ws.cell(r, 2).value = "See Website"
         ws.cell(r, 3).value = row["version"]
-        ws.cell(r, 4).value = "Open Source"
+        ws.cell(r, 4).value = row["vendor"]
         ws.cell(r, 5).value = row["purpose"]
         ws.cell(r, 6).value = "Same as Purpose"
         ws.cell(r, 7).value = row["license"]
@@ -471,6 +477,7 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
     license_overrides = load_license_overrides(license_overrides_path)
     purpose_overrides = load_purpose_overrides(license_overrides_path)
     reference_overrides = load_reference_overrides(license_overrides_path)
+    vendor_overrides = load_vendor_overrides(license_overrides_path)
     aliases = load_component_aliases(component_aliases_path)
     excluded = load_excluded_components(excluded_components_path)
     oss_deps_excluded_path = (
@@ -508,6 +515,7 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
         license_overrides, purpose_overrides, reference_overrides,
         aliases=aliases,
         first_party_dependency_ids=first_party_dependency_ids,
+        vendor_overrides=vendor_overrides,
     )
     components = build_components(
         packages, version_overrides, aliases,

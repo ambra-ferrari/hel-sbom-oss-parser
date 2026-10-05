@@ -158,6 +158,11 @@ def load_reference_overrides(path: str | None) -> dict[str, str]:
     return _override_field_map(path, "reference")
 
 
+def load_vendor_overrides(path: str | None) -> dict[str, str]:
+    """Curated per-package vendor overrides: {name.lower().strip(): vendor}."""
+    return _override_field_map(path, "vendor")
+
+
 def _short_artifact_name(name: str) -> str:
     """Last path segment of a package name: the part after the final ':' or '/'.
 

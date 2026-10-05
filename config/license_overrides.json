@@ -25,6 +25,34 @@
     {"name": "pako", "license": "MIT", "source": "dual-license choice", "note": "Original: MIT OR Zlib. Chosen MIT."},
     {"name": "Jakarta Servlet API", "license": "EPL-2.0", "source": "dual-license choice", "note": "Original: GPL-2.0-only WITH Classpath-exception-2.0 OR EPL-2.0. Chosen EPL-2.0 (non-GPL branch)."},
     {"name": "javax.annotation API", "license": "CDDL-1.1", "source": "dual-license choice", "note": "Original: GPL-2.0-only WITH Classpath-exception-2.0 OR CDDL-1.1. Chosen CDDL-1.1 (non-GPL branch)."},
-    {"name": "Old JAXB Core", "license": "CDDL-1.0", "source": "dual-license choice", "note": "Original: GPL-2.0-only WITH Classpath-exception-2.0 OR CDDL-1.0. Chosen CDDL-1.0 (non-GPL branch)."}
+    {"name": "Old JAXB Core", "license": "CDDL-1.0", "source": "dual-license choice", "note": "Original: GPL-2.0-only WITH Classpath-exception-2.0 OR CDDL-1.0. Chosen CDDL-1.0 (non-GPL branch)."},
+    {
+      "name": "biz.videomed.tl4.tools:lang-manifest",
+      "vendor": "Baxter",
+      "license": "internally developed",
+      "purpose": "proper listing of supported languages for selection from configuration tool",
+      "reference": "website=https://repo1.maven.org/maven2/biz/videomed/tl4/tools/lang-manifest/"
+    },
+    {
+      "name": "biz.videomed.tl4.tools:LDBootloader",
+      "vendor": "Baxter",
+      "license": "internally developed",
+      "purpose": "VMboards firmware update tool",
+      "reference": "website=https://repo1.maven.org/maven2/biz/videomed/tl4/tools/LDBootloader/"
+    },
+    {
+      "name": "biz.videomed.tl4.tools:SystemTest",
+      "vendor": "Baxter",
+      "license": "internally developed",
+      "purpose": "low level interaction with VMBoards for service or test",
+      "reference": "website=https://repo1.maven.org/maven2/biz/videomed/tl4/tools/SystemTest/"
+    },
+    {
+      "name": "biz.videomed.tl4.tools:SerialTest",
+      "vendor": "Baxter",
+      "license": "internally developed",
+      "purpose": "low level interaction with control ports for service or test",
+      "reference": "website=https://repo1.maven.org/maven2/biz/videomed/tl4/tools/SerialTest/"
+    }
   ]
 }

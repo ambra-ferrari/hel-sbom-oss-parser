@@ -378,9 +378,12 @@ keyed by package **name** (case-insensitive). Each entry may carry any of:
   positive).
 - `purpose` — a short description used when SPDX has no usable summary.
 - `reference` — the Reference cell value (typically `website=<url>`).
+- `vendor` — the Vendor cell value in the OSS-dependencies workbook; packages
+  without this override keep the default `Open Source`.
 
-Any field may be omitted; a `purpose`/`reference`-only entry leaves the
-license untouched. Format:
+Any field may be omitted; a `purpose`/`reference`/`vendor`-only entry leaves
+the license untouched. These overrides change generated workbook cells only;
+they do not modify the source SBOM. Format:
 
 ```json
 {

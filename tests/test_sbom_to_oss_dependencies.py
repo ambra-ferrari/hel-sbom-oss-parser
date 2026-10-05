@@ -202,7 +202,7 @@ def test_resolve_license_unknown_when_no_info_at_all():
 
 # ── license normalization (LicenseRef-* → SPDX) ──────────────────────────────
 
-from sbom_lib import normalize_license, load_license_overrides
+from sbom_lib import normalize_license, load_license_overrides, load_vendor_overrides
 from sbom_to_oss_dependencies import flag_review_rows
 
 
@@ -257,6 +257,15 @@ def test_load_license_overrides_keys_lowercased(tmp_path):
 
 def test_load_license_overrides_missing_path_is_empty():
     assert load_license_overrides(None) == {}
+
+
+def test_load_vendor_overrides(tmp_path):
+    p = tmp_path / "ovr.json"
+    p.write_text(json_module.dumps({"overrides": [
+        {"name": "Example:Library", "vendor": "Baxter"},
+        {"name": "NoVendor", "purpose": "not a vendor override"},
+    ]}))
+    assert load_vendor_overrides(str(p)) == {"example:library": "Baxter"}
 
 
 def test_resolve_license_override_wins_over_filescan():
@@ -373,6 +382,23 @@ def test_resolve_reference_override_wins_when_no_homepage():
     pkg = {"name": "cc.nssm:nssm"}
     ovr = {"cc.nssm:nssm": "website=https://nssm.cc/"}
     assert resolve_reference(pkg, ovr) == "website=https://nssm.cc/"
+
+
+def test_build_rows_uses_vendor_override_and_defaults_to_open_source():
+    packages = [
+        {"SPDXID": "SPDXRef-internal", "name": "biz.videomed.tl4.tools:lang-manifest",
+         "versionInfo": "1.0", "supplier": "Organization: Maven"},
+        {"SPDXID": "SPDXRef-oss", "name": "lodash", "versionInfo": "4.18.1",
+         "supplier": "Organization: NPM"},
+    ]
+    rows, _, _ = build_rows(
+        packages, [], {},
+        vendor_overrides={"biz.videomed.tl4.tools:lang-manifest": "Baxter"},
+        first_party_dependency_ids={"lang-manifest"},
+    )
+    rows_by_name = {row["name"]: row for row in rows}
+    assert rows_by_name["biz.videomed.tl4.tools:lang-manifest"]["vendor"] == "Baxter"
+    assert rows_by_name["lodash"]["vendor"] == "Open Source"
 
 
 def test_build_rows_joins_multiple_components_for_shared_package():
@@ -600,6 +626,7 @@ def test_build_excel_writes_expected_sheet_dimensions_and_content(tmp_path):
     assert ws.dimensions == "A1:J2"
     assert ws.cell(2, 1).value == "lodash"
     assert ws.cell(2, 3).value == "4.18.1"
+    assert ws.cell(2, 4).value == "Open Source"
     assert ws.cell(2, 7).value == "MIT"
     assert ws.cell(2, 8).value == "website=https://lodash.com"
     assert ws.cell(2, 9).value == "19518/helion/app-a"
@@ -755,3 +782,65 @@ def test_build_excel_applies_oss_deps_only_exclusions_by_default(tmp_path):
     names = [ws.cell(r, 1).value for r in range(3, ws.max_row + 1)
              if ws.cell(r, 1).value]
     assert names == ["hel-app"]
+
+
+def test_build_excel_applies_first_party_library_metadata(tmp_path):
+    expected = {
+        "biz.videomed.tl4.tools:lang-manifest": (
+            "proper listing of supported languages for selection from configuration tool",
+            "https://repo1.maven.org/maven2/biz/videomed/tl4/tools/lang-manifest/",
+        ),
+        "biz.videomed.tl4.tools:LDBootloader": (
+            "VMboards firmware update tool",
+            "https://repo1.maven.org/maven2/biz/videomed/tl4/tools/LDBootloader/",
+        ),
+        "biz.videomed.tl4.tools:SystemTest": (
+            "low level interaction with VMBoards for service or test",
+            "https://repo1.maven.org/maven2/biz/videomed/tl4/tools/SystemTest/",
+        ),
+        "biz.videomed.tl4.tools:SerialTest": (
+            "low level interaction with control ports for service or test",
+            "https://repo1.maven.org/maven2/biz/videomed/tl4/tools/SerialTest/",
+        ),
+    }
+    packages = [
+        {
+            "SPDXID": f"SPDXRef-metadata-{index}",
+            "name": name,
+            "versionInfo": "1.0",
+            "supplier": "Organization: Maven",
+            "licenseDeclared": "NONE",
+            "homepage": "NOASSERTION",
+            "downloadLocation": "NOASSERTION",
+            "summary": "NOASSERTION",
+        }
+        for index, name in enumerate(expected)
+    ]
+    sbom = _write_sbom(tmp_path, packages)
+    sbom_before = Path(sbom).read_bytes()
+    output = tmp_path / "oss.xlsx"
+    override_path = (
+        Path(__file__).resolve().parent.parent / "config" / "license_overrides.json"
+    )
+
+    build_excel(
+        sbom, OSS_TEMPLATE, str(output),
+        license_overrides_path=str(override_path),
+    )
+
+    assert Path(sbom).read_bytes() == sbom_before
+    workbook = _openpyxl.load_workbook(output, read_only=True, data_only=True)
+    sheet = workbook["Dependencies (OTS SOUP)"]
+    rows = {
+        sheet.cell(row, 1).value: row
+        for row in range(2, sheet.max_row + 1)
+    }
+    for name, (purpose, url) in expected.items():
+        row = rows[name]
+        assert (
+            sheet.cell(row, 4).value,
+            sheet.cell(row, 5).value,
+            sheet.cell(row, 7).value,
+            sheet.cell(row, 8).value,
+        ) == ("Baxter", purpose, "internally developed", f"website={url}")
+    workbook.close()
