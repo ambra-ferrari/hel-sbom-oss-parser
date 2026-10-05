@@ -16,9 +16,12 @@ the full design rationale.
 """
 
 import argparse
+from importlib import metadata
 import json
 import re
 import sys
+import sysconfig
+from pathlib import Path
 
 try:
     import openpyxl
@@ -44,32 +47,128 @@ from sbom_lib import (
     copy_row_style,
 )
 
+DEFAULT_OSS_DEPS_EXCLUDED_COMPONENTS = (
+    Path(__file__).resolve().parent.parent
+    / "config"
+    / "oss_deps_excluded_components.json"
+)
+DEFAULT_OSS_DEPS_FIRST_PARTY_DEPENDENCIES = (
+    Path(__file__).resolve().parent.parent
+    / "config"
+    / "oss_deps_first_party_dependencies.json"
+)
+
+
+def resolve_first_party_dependency_config_path(
+        config_path: str | Path | None = None) -> Path:
+    if config_path is not None:
+        path = Path(config_path)
+        if path.is_file():
+            return path
+        raise FileNotFoundError(f"First-party dependency config file not found: {path}")
+
+    if DEFAULT_OSS_DEPS_FIRST_PARTY_DEPENDENCIES.is_file():
+        return DEFAULT_OSS_DEPS_FIRST_PARTY_DEPENDENCIES
+
+    try:
+        distribution = metadata.distribution("hel-sbom-oss-parser")
+    except metadata.PackageNotFoundError:
+        distribution = None
+    if distribution is not None:
+        expected_parts = (
+            "share", "hel-sbom-oss-parser",
+            "oss_deps_first_party_dependencies.json",
+        )
+        for installed_file in distribution.files or ():
+            if tuple(installed_file.parts[-3:]) != expected_parts:
+                continue
+            located_path = Path(distribution.locate_file(installed_file))
+            if located_path.is_file():
+                return located_path
+
+    packaged_path = (
+        Path(sysconfig.get_path("data"))
+        / "share"
+        / "hel-sbom-oss-parser"
+        / "oss_deps_first_party_dependencies.json"
+    )
+    if packaged_path.is_file():
+        return packaged_path
+
+    raise FileNotFoundError(
+        "First-party dependency config file not found in source tree, "
+        f"installed distribution, or installation data directory: {packaged_path}"
+    )
+
+
+def load_first_party_dependency_ids(config_path: str | Path) -> set[str]:
+    path = Path(config_path)
+    try:
+        with path.open(encoding="utf-8") as config_file:
+            config = json.load(config_file)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"First-party dependency config is not valid JSON: {path} ({exc})"
+        ) from exc
+    if not isinstance(config, dict):
+        raise ValueError(
+            f"First-party dependency config must contain a JSON object: {path}"
+        )
+    return {
+        str(artifact_id).strip().casefold()
+        for artifact_id in config
+        if str(artifact_id).strip()
+    }
+
 
 # ── component graph ───────────────────────────────────────────────────────────
 
-def build_component_graph(packages: list[dict], relationships: list[dict]) -> dict[str, set[str]]:
+def is_configured_first_party_dependency(pkg: dict, artifact_ids: set[str]) -> bool:
+    name = (pkg.get("name") or "").strip()
+    artifact_id = name.rsplit(":", 1)[-1].strip().casefold()
+    return artifact_id in artifact_ids
+
+
+def _normalize_first_party_dependency_ids(artifact_ids: set[str] | None) -> set[str]:
+    return {artifact_id.strip().casefold() for artifact_id in artifact_ids or set()}
+
+
+def build_component_graph(
+        packages: list[dict],
+        relationships: list[dict],
+        first_party_dependency_ids: set[str] | None = None) -> dict[str, set[str]]:
     """Map every real package's SPDXID to the set of internal-component
     SPDXIDs that depend on it.
 
-    Two sources of edges:
-      1. Direct: a `DEPENDENCY_OF` relationship whose `relatedSpdxElement`
-         is a first-party component.
-      2. Placeholder chain: FOSSA sometimes routes a component's dependency
-         through an "Incomplete dependency" placeholder package instead of
-         the real one (component -> placeholder -> real). When that
-         happens, the placeholder's own resolved components (from step 1)
-         are attributed directly to the real package it `DEPENDS_ON`.
+    Direct edges are accepted in either SPDX encoding:
+      1. `DEPENDENCY_OF`: package subject -> component object.
+      2. `DEPENDS_ON`: component subject -> package object.
+    FOSSA sometimes routes a component's dependency through an "Incomplete
+    dependency" placeholder package (component -> placeholder -> real). In
+    that case, the placeholder's resolved components are attributed directly
+    to the real package it `DEPENDS_ON`.
     """
-    component_ids = {pkg["SPDXID"] for pkg in packages if is_first_party(pkg)}
+    first_party_dependency_ids = _normalize_first_party_dependency_ids(
+        first_party_dependency_ids
+    )
+    component_ids = {
+        pkg["SPDXID"] for pkg in packages
+        if is_first_party(pkg)
+        and not is_configured_first_party_dependency(pkg, first_party_dependency_ids)
+    }
+    package_ids = {pkg["SPDXID"] for pkg in packages}
     placeholder_ids = {pkg["SPDXID"] for pkg in packages if is_incomplete_dependency(pkg)}
 
     pkg_to_components: dict[str, set[str]] = {}
     for rel in relationships:
-        if rel.get("relationshipType") != "DEPENDENCY_OF":
-            continue
+        relationship_type = rel.get("relationshipType")
+        source = rel.get("spdxElementId")
         related = rel.get("relatedSpdxElement")
-        if related in component_ids:
-            pkg_to_components.setdefault(rel["spdxElementId"], set()).add(related)
+        if relationship_type == "DEPENDENCY_OF" and related in component_ids:
+            pkg_to_components.setdefault(source, set()).add(related)
+        elif (relationship_type == "DEPENDS_ON"
+              and source in component_ids and related in package_ids):
+            pkg_to_components.setdefault(related, set()).add(source)
 
     for rel in relationships:
         if rel.get("relationshipType") != "DEPENDS_ON":
@@ -151,7 +250,8 @@ def build_rows(packages: list[dict], relationships: list[dict], version_override
                license_overrides: dict | None = None,
                purpose_overrides: dict | None = None,
                reference_overrides: dict | None = None,
-               aliases: dict[str, str] | None = None):
+               aliases: dict[str, str] | None = None,
+               first_party_dependency_ids: set[str] | None = None):
     """Build one output row per unique OSS package (name + version).
 
     Returns (rows, placeholders_dropped, duplicates_merged):
@@ -163,7 +263,12 @@ def build_rows(packages: list[dict], relationships: list[dict], version_override
         instead of creating a duplicate row (happens with aggregated
         multi-project SBOMs).
     """
-    pkg_to_components = build_component_graph(packages, relationships)
+    first_party_dependency_ids = _normalize_first_party_dependency_ids(
+        first_party_dependency_ids
+    )
+    pkg_to_components = build_component_graph(
+        packages, relationships, first_party_dependency_ids
+    )
     pkgs_by_id = {pkg["SPDXID"]: pkg for pkg in packages}
     aliases = aliases or {}
 
@@ -171,7 +276,9 @@ def build_rows(packages: list[dict], relationships: list[dict], version_override
 
     oss_packages = [
         pkg for pkg in packages
-        if not is_first_party(pkg) and not is_incomplete_dependency(pkg)
+        if (not is_first_party(pkg)
+            or is_configured_first_party_dependency(pkg, first_party_dependency_ids))
+        and not is_incomplete_dependency(pkg)
     ]
 
     rows_by_key: dict[tuple[str, str], dict] = {}
@@ -233,7 +340,8 @@ def flag_review_rows(rows: list[dict]) -> list[dict]:
 
 
 def build_components(packages: list[dict], version_overrides: dict,
-                     aliases: dict[str, str] | None = None) -> list[dict]:
+                     aliases: dict[str, str] | None = None,
+                     first_party_dependency_ids: set[str] | None = None) -> list[dict]:
     """Internal Helion components for the 'SW-SYS Components (Ref-only)' sheet.
 
     Names are resolved to their canonical form via the curated alias map, then
@@ -244,9 +352,13 @@ def build_components(packages: list[dict], version_overrides: dict,
     Within a group, the 'hel-' name is preferred for display. Sorted by name.
     """
     aliases = aliases or {}
+    first_party_dependency_ids = _normalize_first_party_dependency_ids(
+        first_party_dependency_ids
+    )
     names_by_key: dict[tuple[str, str], list[str]] = {}
     for pkg in packages:
-        if not is_first_party(pkg):
+        if (not is_first_party(pkg)
+                or is_configured_first_party_dependency(pkg, first_party_dependency_ids)):
             continue
         name = canonical_component_name(pkg.get("name", ""), aliases)
         version = resolve_version(pkg, version_overrides)
@@ -351,13 +463,37 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
                  version_overrides_path: str | None = None,
                  license_overrides_path: str | None = None,
                  component_aliases_path: str | None = None,
-                 excluded_components_path: str | None = None):
+                 excluded_components_path: str | None = None,
+                 oss_deps_excluded_components_path: str | None = None,
+                 first_party_dependency_ids: set[str] | None = None,
+                 first_party_dependency_config_path: str | None = None):
     version_overrides = load_version_overrides(version_overrides_path)
     license_overrides = load_license_overrides(license_overrides_path)
     purpose_overrides = load_purpose_overrides(license_overrides_path)
     reference_overrides = load_reference_overrides(license_overrides_path)
     aliases = load_component_aliases(component_aliases_path)
     excluded = load_excluded_components(excluded_components_path)
+    oss_deps_excluded_path = (
+        oss_deps_excluded_components_path
+        if oss_deps_excluded_components_path is not None
+        else str(DEFAULT_OSS_DEPS_EXCLUDED_COMPONENTS)
+    )
+    excluded.update(load_excluded_components(oss_deps_excluded_path))
+    if first_party_dependency_ids is None:
+        first_party_dependency_path = resolve_first_party_dependency_config_path(
+            first_party_dependency_config_path
+        )
+        first_party_dependency_ids = load_first_party_dependency_ids(
+            first_party_dependency_path
+        )
+    elif first_party_dependency_config_path is not None:
+        raise ValueError(
+            "first_party_dependency_config_path cannot be combined with "
+            "first_party_dependency_ids"
+        )
+    first_party_dependency_ids = _normalize_first_party_dependency_ids(
+        first_party_dependency_ids
+    )
 
     with open(sbom_path, encoding="utf-8") as f:
         sbom = json.load(f)
@@ -371,8 +507,12 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
         packages, relationships, version_overrides,
         license_overrides, purpose_overrides, reference_overrides,
         aliases=aliases,
+        first_party_dependency_ids=first_party_dependency_ids,
     )
-    components = build_components(packages, version_overrides, aliases)
+    components = build_components(
+        packages, version_overrides, aliases,
+        first_party_dependency_ids=first_party_dependency_ids,
+    )
 
     unknown_licenses = sum(1 for row in rows if row["license"] == "UNKNOWN - Review Required")
     fallback_licenses = sum(1 for row in rows if "(derived from file scan" in row["license"])
@@ -430,6 +570,20 @@ def main():
              "excluded_components.json) for components that must never "
              "appear in the output, regardless of party/version."
     )
+    parser.add_argument(
+        "--oss-deps-excluded-components",
+        default=str(DEFAULT_OSS_DEPS_EXCLUDED_COMPONENTS),
+        help="Path to a JSON file of components excluded only from this OSS "
+             "dependencies deliverable (defaults to config/"
+             "oss_deps_excluded_components.json).",
+    )
+    parser.add_argument(
+        "--oss-deps-first-party-dependencies",
+        default=None,
+        help="Path to a JSON file of first-party artifact IDs treated as "
+             "dependencies only in the OSS-dependencies workbook (defaults to "
+             "the source-tree config or packaged config).",
+    )
     args = parser.parse_args()
 
     build_excel(
@@ -441,6 +595,8 @@ def main():
         license_overrides_path=args.license_overrides,
         component_aliases_path=args.component_aliases,
         excluded_components_path=args.excluded_components,
+        oss_deps_excluded_components_path=args.oss_deps_excluded_components,
+        first_party_dependency_config_path=args.oss_deps_first_party_dependencies,
     )
 
 

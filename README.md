@@ -241,6 +241,26 @@ Optional — omitting it changes nothing. Used identically by
 `normalize_sbom_aliases.py` (which also drops any relationship referencing
 the excluded package from the normalized SPDX JSON).
 
+### OSS-dependencies-only exclusions
+
+`config/oss_deps_excluded_components.json` lists components omitted only from
+the OTS-SOUP OSS dependencies workbook. These packages remain in the SBOM and
+other deliverables:
+
+```json
+{
+  "hel-invalidated-tokens-api": "Excluded from the OSS dependencies deliverable only; retain in the SBOM.",
+  "invalidated-tokens-api": "Maven artifact alias of hel-invalidated-tokens-api; exclude from OSS dependencies only and retain in the SBOM.",
+  "hel-nms-broker-api": "Excluded from the OSS dependencies deliverable only; retain in the SBOM.",
+  "nms-broker-api": "Maven artifact alias of hel-nms-broker-api; exclude from OSS dependencies only and retain in the SBOM."
+}
+```
+
+`sbom_to_oss_dependencies.py` applies this file by default. Override its
+location with `--oss-deps-excluded-components`. Maven artifact aliases are
+included because OSS-deps canonicalizes those package names to the matching
+`hel-*` component after exclusions are applied.
+
 ### Static document name override (`normalize_sbom_aliases.py --document-name`)
 
 `normalize_sbom_aliases.py` (the script that writes the normalized SPDX JSON
@@ -311,6 +331,15 @@ from an SPDX JSON SBOM: one row per external OSS package in
 - **OSS vs internal component**: same `is_first_party()` marker as
   `sbom_to_excel.py` (`supplier` contains `Custom (provided build)`) — those
   packages go to the components sheet, never to the OSS sheet.
+- **Configured first-party dependencies**: artifact IDs listed in
+  `config/oss_deps_first_party_dependencies.json` override the first-party
+  classification for this workbook only. They appear in `Dependencies (OTS
+  SOUP)` with their dependent first-party components and are omitted from
+  `SW-SYS Components (Ref-only)`. Matching is an exact, case-insensitive
+  comparison against the final name segment after `:` (the Maven artifact
+  ID), independent of group and version. The default list includes
+  `lang-manifest`, `LDBootloader`, `SerialTest`, and `SystemTest`; these
+  packages remain unchanged in both the input and normalized SBOM.
 - **Incomplete/placeholder packages**: FOSSA's "Incomplete dependency"
   placeholders are dropped; if an internal component depended on the
   placeholder instead of the real package, that dependency is re-attributed
@@ -377,7 +406,9 @@ python3 src/sbom_to_oss_dependencies.py \
     [--version-overrides config/version-overrides.json] \
     [--license-overrides config/license_overrides.json] \
     [--component-aliases config/component_aliases.json] \
-    [--excluded-components config/excluded_components.json]
+    [--excluded-components config/excluded_components.json] \
+    [--oss-deps-excluded-components config/oss_deps_excluded_components.json] \
+    [--oss-deps-first-party-dependencies config/oss_deps_first_party_dependencies.json]
 ```
 
 | Flag | Required | Description |
@@ -390,6 +421,8 @@ python3 src/sbom_to_oss_dependencies.py \
 | `--license-overrides` | no | Path to a JSON file of curated SPDX license overrides (see `config/license_overrides.json`) |
 | `--component-aliases` | no | Path to a JSON file of curated first-party component aliases (see `config/component_aliases.json`) that collapse the same internal component's two names into one canonical row |
 | `--excluded-components` | no | Path to a JSON file of curated component exclusions (see `config/excluded_components.json`) for components that must never appear in the output |
+| `--oss-deps-excluded-components` | no | Path to the OSS-dependencies-only exclusions (defaults to `config/oss_deps_excluded_components.json`); these components remain in the SBOM |
+| `--oss-deps-first-party-dependencies` | no | Path to the JSON map of first-party artifact IDs emitted as dependencies in this workbook only (defaults to `config/oss_deps_first_party_dependencies.json`) |
 
 ---
 

@@ -26,5 +26,8 @@ py-modules = [
     "download_release_sbom",
 ]
 
+[tool.setuptools.data-files]
+"share/hel-sbom-oss-parser" = ["config/oss_deps_first_party_dependencies.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

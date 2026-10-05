@@ -1,0 +1,6 @@
+{
+  "lang-manifest": "Internal library treated as a dependency only in the OSS-dependencies workbook.",
+  "ldbootloader": "Internal library treated as a dependency only in the OSS-dependencies workbook.",
+  "serialtest": "Internal library treated as a dependency only in the OSS-dependencies workbook.",
+  "systemtest": "Internal library treated as a dependency only in the OSS-dependencies workbook."
+}

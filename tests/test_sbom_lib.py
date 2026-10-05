@@ -339,6 +339,24 @@ def test_remove_excluded_packages_does_not_mutate_input():
     assert len(spdx["packages"]) == 1
 
 
+def test_oss_deps_only_exclusions_do_not_remove_packages_from_sbom():
+    excluded_path = Path(__file__).resolve().parent.parent / "config" / "excluded_components.json"
+    excluded = load_excluded_components(str(excluded_path))
+    spdx = _spdx([
+        {"SPDXID": "SPDXRef-invalidated", "name": "hel-invalidated-tokens-api",
+         "versionInfo": "1.0", "supplier": "Organization: Baxter"},
+        {"SPDXID": "SPDXRef-broker", "name": "hel-nms-broker-api",
+         "versionInfo": "1.0", "supplier": "Organization: Baxter"},
+    ])
+
+    out = remove_excluded_packages(spdx, excluded)
+
+    assert [package["name"] for package in out["packages"]] == [
+        "hel-invalidated-tokens-api",
+        "hel-nms-broker-api",
+    ]
+
+
 def test_set_document_name_overrides_name():
     spdx = {"name": "561 / current (aggregated)", "packages": [], "relationships": []}
     out = set_document_name(spdx, "Truelink 4 (or Helion)/1.8.0")

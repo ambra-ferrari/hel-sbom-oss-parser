@@ -2,10 +2,12 @@ import sys
 from pathlib import Path
 import json as json_module
 import openpyxl as _openpyxl
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 OSS_TEMPLATE = str(Path(__file__).resolve().parent.parent / "templates" / "oss-template.xlsx")
 
+import sbom_to_oss_dependencies as oss_dependencies
 from sbom_to_oss_dependencies import (
     build_component_graph,
     build_excel,
@@ -16,6 +18,116 @@ from sbom_to_oss_dependencies import (
     resolve_purl,
     resolve_purpose,
 )
+
+
+def test_first_party_dependency_config_prefers_source_tree(monkeypatch, tmp_path):
+    source_config = tmp_path / "config" / "oss_deps_first_party_dependencies.json"
+    source_config.parent.mkdir()
+    source_config.write_text("{}")
+    monkeypatch.setattr(
+        oss_dependencies, "DEFAULT_OSS_DEPS_FIRST_PARTY_DEPENDENCIES", source_config
+    )
+    monkeypatch.setattr(
+        oss_dependencies.sysconfig, "get_path",
+        lambda scheme: str(tmp_path / "install-data"),
+    )
+
+    assert oss_dependencies.resolve_first_party_dependency_config_path() == source_config
+
+
+def test_first_party_dependency_config_falls_back_to_packaged_data(monkeypatch, tmp_path):
+    source_config = tmp_path / "source" / "config" / "oss_deps_first_party_dependencies.json"
+    packaged_config = (
+        tmp_path / "install-data" / "share" / "hel-sbom-oss-parser"
+        / "oss_deps_first_party_dependencies.json"
+    )
+    packaged_config.parent.mkdir(parents=True)
+    packaged_config.write_text("{}")
+    monkeypatch.setattr(
+        oss_dependencies, "DEFAULT_OSS_DEPS_FIRST_PARTY_DEPENDENCIES", source_config
+    )
+    monkeypatch.setattr(
+        oss_dependencies.sysconfig, "get_path",
+        lambda scheme: str(tmp_path / "install-data"),
+    )
+
+    assert oss_dependencies.resolve_first_party_dependency_config_path() == packaged_config
+
+
+def test_first_party_dependency_config_uses_distribution_locate_file(
+        monkeypatch, tmp_path):
+    source_config = tmp_path / "source" / "config" / "oss_deps_first_party_dependencies.json"
+    custom_target = tmp_path / "custom-prefix" / "share" / "hel-sbom-oss-parser"
+    packaged_config = custom_target / "oss_deps_first_party_dependencies.json"
+    custom_target.mkdir(parents=True)
+    packaged_config.write_text("{}")
+    monkeypatch.setattr(
+        oss_dependencies, "DEFAULT_OSS_DEPS_FIRST_PARTY_DEPENDENCIES", source_config
+    )
+
+    class InstalledDistribution:
+        files = [Path("custom-prefix/share/hel-sbom-oss-parser/"
+                      "oss_deps_first_party_dependencies.json")]
+
+        def locate_file(self, package_path):
+            return tmp_path / package_path
+
+    monkeypatch.setattr(
+        oss_dependencies.metadata, "distribution",
+        lambda name: InstalledDistribution(),
+    )
+
+    assert oss_dependencies.resolve_first_party_dependency_config_path() == packaged_config
+
+
+def test_missing_first_party_dependency_config_fails_clearly(tmp_path):
+    missing_config = tmp_path / "missing.json"
+
+    with pytest.raises(FileNotFoundError, match=str(missing_config)):
+        oss_dependencies.resolve_first_party_dependency_config_path(str(missing_config))
+
+
+def test_first_party_dependency_config_rejects_non_object_json(tmp_path):
+    config_path = tmp_path / "not-an-object.json"
+    config_path.write_text("[]")
+
+    with pytest.raises(ValueError, match="must contain a JSON object"):
+        oss_dependencies.load_first_party_dependency_ids(str(config_path))
+
+
+def test_first_party_dependency_config_rejects_invalid_json(tmp_path):
+    config_path = tmp_path / "invalid.json"
+    config_path.write_text("{")
+
+    with pytest.raises(ValueError, match="not valid JSON"):
+        oss_dependencies.load_first_party_dependency_ids(str(config_path))
+
+
+def test_build_excel_accepts_first_party_dependency_config_path(tmp_path):
+    packages = [
+        {"SPDXID": "SPDXRef-internal", "name": "biz.videomed.tools:internal-helper",
+         "versionInfo": "1.0", "supplier": "Organization: Maven"},
+        {"SPDXID": "SPDXRef-app", "name": "hel-app",
+         "versionInfo": "2.0", "supplier": "Organization: Baxter"},
+    ]
+    relationships = [
+        {"spdxElementId": "SPDXRef-internal", "relationshipType": "DEPENDENCY_OF",
+         "relatedSpdxElement": "SPDXRef-app"},
+    ]
+    config_path = tmp_path / "first-party-dependencies.json"
+    config_path.write_text(json_module.dumps({"INTERNAL-HELPER": "test config"}))
+    sbom = _write_sbom(tmp_path, packages, relationships)
+    output = tmp_path / "out.xlsx"
+
+    build_excel(
+        sbom, OSS_TEMPLATE, str(output),
+        first_party_dependency_config_path=str(config_path),
+    )
+
+    worksheet = _openpyxl.load_workbook(output)["Dependencies (OTS SOUP)"]
+    assert (worksheet.cell(2, 1).value, worksheet.cell(2, 9).value) == (
+        "biz.videomed.tools:internal-helper", "hel-app"
+    )
 
 
 def _write_sbom(tmp_path, packages, relationships=None):
@@ -351,6 +463,32 @@ def test_build_rows_excludes_first_party_packages():
     assert merged == 0
 
 
+def test_explicit_first_party_dependency_ids_match_case_insensitively():
+    packages = [
+        {"SPDXID": "SPDXRef-serial", "name": "biz.videomed.tools:SerialTest",
+         "versionInfo": "1.0", "supplier": "Organization: Maven"},
+        {"SPDXID": "SPDXRef-app", "name": "hel-app", "versionInfo": "2.0",
+         "supplier": "Organization: Baxter"},
+    ]
+    relationships = [
+        {"spdxElementId": "SPDXRef-serial", "relationshipType": "DEPENDENCY_OF",
+         "relatedSpdxElement": "SPDXRef-app"},
+    ]
+    artifact_ids = {"SERIALTEST"}
+
+    rows, _, _ = build_rows(
+        packages, relationships, {}, first_party_dependency_ids=artifact_ids
+    )
+    graph = build_component_graph(packages, relationships, artifact_ids)
+    components = build_components(packages, {}, first_party_dependency_ids=artifact_ids)
+
+    assert [(row["name"], row["components"]) for row in rows] == [
+        ("biz.videomed.tools:SerialTest", "hel-app")
+    ]
+    assert graph == {"SPDXRef-serial": {"SPDXRef-app"}}
+    assert [component["name"] for component in components] == ["hel-app"]
+
+
 def test_build_rows_drops_placeholders_and_counts_them():
     packages = [
         {"SPDXID": "SPDXRef-placeholder", "name": "x.zip", "versionInfo": "NOASSERTION",
@@ -474,6 +612,72 @@ def test_build_excel_writes_expected_sheet_dimensions_and_content(tmp_path):
     assert "Test Product" in ws2.cell(1, 1).value
 
 
+def test_build_excel_classifies_configured_first_party_artifacts_as_dependencies(tmp_path):
+    dependency_names = [
+        "biz.videomed.t4.tools:lang-manifest",
+        "biz.videomed.t4.tools:LDBootloader",
+        "biz.videomed.t4.tools:SerialTest",
+        "biz.videomed.t4.tools:SystemTest",
+    ]
+    packages = [
+        {"SPDXID": "SPDXRef-lang-manifest", "name": dependency_names[0],
+         "versionInfo": "1.0.1", "supplier": "Organization: Maven"},
+        {"SPDXID": "SPDXRef-ldbootloader", "name": dependency_names[1],
+         "versionInfo": "2.0.2", "supplier": "Organization: Maven"},
+        {"SPDXID": "SPDXRef-serialtest", "name": dependency_names[2],
+         "versionInfo": "3.0.3", "supplier": "Organization: Maven"},
+        {"SPDXID": "SPDXRef-systemtest", "name": dependency_names[3],
+         "versionInfo": "4.0.4", "supplier": "Organization: Maven"},
+        {"SPDXID": "SPDXRef-hel-app", "name": "hel-app",
+         "versionInfo": "5.0.5", "supplier": "Organization: Baxter"},
+    ]
+    relationships = [
+        {"spdxElementId": package["SPDXID"], "relationshipType": "DEPENDENCY_OF",
+         "relatedSpdxElement": "SPDXRef-hel-app"}
+        for package in packages[:2]
+    ] + [
+        {"spdxElementId": "SPDXRef-hel-app", "relationshipType": "DEPENDS_ON",
+         "relatedSpdxElement": package["SPDXID"]}
+        for package in packages[2:4]
+    ]
+
+    sbom = _write_sbom(tmp_path, packages, relationships)
+    with open(sbom, encoding="utf-8") as f:
+        source_document_before = json_module.load(f)
+
+    out = tmp_path / "out.xlsx"
+    build_excel(sbom, OSS_TEMPLATE, str(out))
+
+    wb = _openpyxl.load_workbook(str(out))
+    dependencies_ws = wb["Dependencies (OTS SOUP)"]
+    dependency_rows = [
+        (
+            dependencies_ws.cell(row, 1).value,
+            dependencies_ws.cell(row, 3).value,
+            dependencies_ws.cell(row, 9).value,
+        )
+        for row in range(2, dependencies_ws.max_row + 1)
+    ]
+    assert dependency_rows == [
+        (dependency_names[0], "1.0.1", "hel-app"),
+        (dependency_names[1], "2.0.2", "hel-app"),
+        (dependency_names[2], "3.0.3", "hel-app"),
+        (dependency_names[3], "4.0.4", "hel-app"),
+    ]
+
+    components_ws = wb["SW-SYS Components (Ref-only)"]
+    component_names = [
+        components_ws.cell(row, 1).value
+        for row in range(3, components_ws.max_row + 1)
+        if components_ws.cell(row, 1).value
+    ]
+    assert component_names == ["hel-app"]
+
+    with open(sbom, encoding="utf-8") as f:
+        source_document_after = json_module.load(f)
+    assert source_document_after == source_document_before
+
+
 def test_build_excel_end_to_end_collapses_twins_in_components_sheet(tmp_path):
     from sbom_to_oss_dependencies import build_excel
     packages = [
@@ -508,6 +712,43 @@ def test_build_excel_drops_explicitly_excluded_components(tmp_path):
     excluded_path.write_text(json_module.dumps({"licensing": "test"}))
     out = tmp_path / "out.xlsx"
     build_excel(sbom, OSS_TEMPLATE, str(out), excluded_components_path=str(excluded_path))
+
+    wb = _openpyxl.load_workbook(str(out))
+    ws = wb["SW-SYS Components (Ref-only)"]
+    names = [ws.cell(r, 1).value for r in range(3, ws.max_row + 1)
+             if ws.cell(r, 1).value]
+    assert names == ["hel-app"]
+
+
+def test_build_excel_applies_oss_deps_only_exclusions_by_default(tmp_path):
+    packages = [
+        {"SPDXID": "SPDXRef-invalidated", "name": "hel-invalidated-tokens-api",
+         "versionInfo": "1.0", "supplier": "Organization: Baxter"},
+        {"SPDXID": "SPDXRef-mvn-invalidated",
+         "name": "biz.videomed.tl4:invalidated-tokens-api",
+         "versionInfo": "1.0", "supplier": "Organization: Maven"},
+        {"SPDXID": "SPDXRef-broker", "name": "hel-nms-broker-api",
+         "versionInfo": "1.0", "supplier": "Organization: Baxter"},
+        {"SPDXID": "SPDXRef-mvn-broker",
+         "name": "biz.videomed.nexxis:nms-broker-api",
+         "versionInfo": "1.0", "supplier": "Organization: Maven"},
+        {"SPDXID": "SPDXRef-app", "name": "hel-app",
+         "versionInfo": "1.0", "supplier": "Organization: Baxter"},
+    ]
+    sbom = _write_sbom(tmp_path, packages)
+    out = tmp_path / "out.xlsx"
+
+    build_excel(sbom, OSS_TEMPLATE, str(out))
+
+    with open(sbom, encoding="utf-8") as f:
+        source_names = [package["name"] for package in json_module.load(f)["packages"]]
+    assert source_names == [
+        "hel-invalidated-tokens-api",
+        "biz.videomed.tl4:invalidated-tokens-api",
+        "hel-nms-broker-api",
+        "biz.videomed.nexxis:nms-broker-api",
+        "hel-app",
+    ]
 
     wb = _openpyxl.load_workbook(str(out))
     ws = wb["SW-SYS Components (Ref-only)"]

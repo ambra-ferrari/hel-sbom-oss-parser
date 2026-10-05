@@ -1,0 +1,6 @@
+{
+  "hel-invalidated-tokens-api": "Excluded from the OSS dependencies deliverable only; retain in the SBOM.",
+  "invalidated-tokens-api": "Maven artifact alias of hel-invalidated-tokens-api; exclude from OSS dependencies only and retain in the SBOM.",
+  "hel-nms-broker-api": "Excluded from the OSS dependencies deliverable only; retain in the SBOM.",
+  "nms-broker-api": "Maven artifact alias of hel-nms-broker-api; exclude from OSS dependencies only and retain in the SBOM."
+}
