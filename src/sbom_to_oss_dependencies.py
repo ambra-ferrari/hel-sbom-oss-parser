@@ -41,6 +41,7 @@ from sbom_lib import (
     load_excluded_components,
     load_license_overrides,
     load_purpose_overrides,
+    load_ref_overrides,
     load_reference_overrides,
     load_vendor_overrides,
     normalize_license,
@@ -219,15 +220,25 @@ def resolve_reference(pkg: dict, reference_overrides: dict | None = None) -> str
     return ""
 
 
-def resolve_purl(pkg: dict) -> str:
-    """Package URL from externalRefs, falling back to the download location."""
+def _resolve_purl_with_priority(
+        pkg: dict, ref_overrides: dict[str, str] | None = None) -> tuple[str, int]:
+    """Return a package reference and its precedence: PURL, download, then override."""
     for ref in pkg.get("externalRefs") or []:
         if ref.get("referenceType") == "purl":
-            return ref.get("referenceLocator", "")
-    download = pkg.get("downloadLocation")
+            locator = (ref.get("referenceLocator") or "").strip()
+            if locator and locator != "NOASSERTION":
+                return locator, 2
+    download = (pkg.get("downloadLocation") or "").strip()
     if download and download != "NOASSERTION":
-        return download
-    return ""
+        return download, 1
+    ref_overrides = ref_overrides or {}
+    name = (pkg.get("name") or "").strip().lower()
+    return ref_overrides.get(name, ""), 0
+
+
+def resolve_purl(pkg: dict, ref_overrides: dict[str, str] | None = None) -> str:
+    """Resolve a PURL/download URL, then use an explicit per-package Ref fallback."""
+    return _resolve_purl_with_priority(pkg, ref_overrides)[0]
 
 
 def resolve_purpose(pkg: dict, purpose_overrides: dict | None = None) -> str:
@@ -253,7 +264,9 @@ def build_rows(packages: list[dict], relationships: list[dict], version_override
                reference_overrides: dict | None = None,
                aliases: dict[str, str] | None = None,
                first_party_dependency_ids: set[str] | None = None,
-               vendor_overrides: dict[str, str] | None = None):
+               vendor_overrides: dict[str, str] | None = None,
+               ref_overrides: dict[str, str] | None = None,
+               component_packages: list[dict] | None = None):
     """Build one output row per unique OSS package (name + version).
 
     Returns (rows, placeholders_dropped, duplicates_merged):
@@ -268,12 +281,14 @@ def build_rows(packages: list[dict], relationships: list[dict], version_override
     first_party_dependency_ids = _normalize_first_party_dependency_ids(
         first_party_dependency_ids
     )
+    graph_packages = component_packages if component_packages is not None else packages
     pkg_to_components = build_component_graph(
-        packages, relationships, first_party_dependency_ids
+        graph_packages, relationships, first_party_dependency_ids
     )
-    pkgs_by_id = {pkg["SPDXID"]: pkg for pkg in packages}
+    pkgs_by_id = {pkg["SPDXID"]: pkg for pkg in graph_packages}
     aliases = aliases or {}
     vendor_overrides = vendor_overrides or {}
+    ref_overrides = ref_overrides or {}
 
     placeholders_dropped = sum(1 for pkg in packages if is_incomplete_dependency(pkg))
 
@@ -285,6 +300,7 @@ def build_rows(packages: list[dict], relationships: list[dict], version_override
     ]
 
     rows_by_key: dict[tuple[str, str], dict] = {}
+    ref_priorities: dict[tuple[str, str], int] = {}
     order: list[tuple[str, str]] = []
     duplicates_merged = 0
 
@@ -301,8 +317,17 @@ def build_rows(packages: list[dict], relationships: list[dict], version_override
 
         if key in rows_by_key:
             rows_by_key[key]["components"].update(component_names)
+            ref, ref_priority = _resolve_purl_with_priority(pkg, ref_overrides)
+            if ref_priority > ref_priorities[key]:
+                rows_by_key[key]["ref"] = ref
+                ref_priorities[key] = ref_priority
             duplicates_merged += 1
             continue
+
+        purpose = resolve_purpose(pkg, purpose_overrides)
+        if purpose:
+            purpose = purpose[0].upper() + purpose[1:]
+        ref, ref_priority = _resolve_purl_with_priority(pkg, ref_overrides)
 
         rows_by_key[key] = {
             "name": name,
@@ -310,12 +335,13 @@ def build_rows(packages: list[dict], relationships: list[dict], version_override
             "vendor": vendor_overrides.get(
                 (pkg.get("name") or "").strip().lower(), "Open Source"
             ),
-            "purpose": resolve_purpose(pkg, purpose_overrides),
+            "purpose": purpose,
             "license": resolve_license(pkg, license_overrides),
             "reference": resolve_reference(pkg, reference_overrides),
             "components": set(component_names),
-            "ref": resolve_purl(pkg),
+            "ref": ref,
         }
+        ref_priorities[key] = ref_priority
         order.append(key)
 
     rows = [rows_by_key[key] for key in order]
@@ -476,6 +502,7 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
     version_overrides = load_version_overrides(version_overrides_path)
     license_overrides = load_license_overrides(license_overrides_path)
     purpose_overrides = load_purpose_overrides(license_overrides_path)
+    ref_overrides = load_ref_overrides(license_overrides_path)
     reference_overrides = load_reference_overrides(license_overrides_path)
     vendor_overrides = load_vendor_overrides(license_overrides_path)
     aliases = load_component_aliases(component_aliases_path)
@@ -505,8 +532,11 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
     with open(sbom_path, encoding="utf-8") as f:
         sbom = json.load(f)
 
-    packages = sbom.get("packages", [])
-    packages = [pkg for pkg in packages if not is_excluded_component(pkg.get("name", ""), excluded)]
+    all_packages = sbom.get("packages", [])
+    packages = [
+        pkg for pkg in all_packages
+        if not is_excluded_component(pkg.get("name", ""), excluded)
+    ]
     relationships = sbom.get("relationships", [])
     resolved_name = product_name or sbom.get("name", "Unknown Product")
 
@@ -516,6 +546,8 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
         aliases=aliases,
         first_party_dependency_ids=first_party_dependency_ids,
         vendor_overrides=vendor_overrides,
+        ref_overrides=ref_overrides,
+        component_packages=all_packages,
     )
     components = build_components(
         packages, version_overrides, aliases,

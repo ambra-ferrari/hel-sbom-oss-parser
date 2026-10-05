@@ -259,6 +259,13 @@ def test_load_license_overrides_missing_path_is_empty():
     assert load_license_overrides(None) == {}
 
 
+def test_yalv_license_override_is_apache_2():
+    overrides_path = Path(__file__).resolve().parent.parent / "config" / "license_overrides.json"
+    overrides = load_license_overrides(str(overrides_path))
+    package = {"name": "com.github.lukepet:yalv", "licenseDeclared": "NONE"}
+    assert resolve_license(package, overrides) == "Apache-2.0"
+
+
 def test_load_vendor_overrides(tmp_path):
     p = tmp_path / "ovr.json"
     p.write_text(json_module.dumps({"overrides": [
@@ -330,6 +337,37 @@ def test_resolve_purl_prefers_external_ref_then_download_location():
     assert resolve_purl({}) == ""
 
 
+def test_resolve_purl_uses_ref_override_only_when_sbom_has_no_reference():
+    overrides = {"archive-pkg": "https://project.example/archive-pkg"}
+    pkg = {"name": "Archive-Pkg", "homepage": "NOASSERTION",
+           "downloadLocation": "NOASSERTION", "externalRefs": []}
+    assert resolve_purl(pkg, overrides) == "https://project.example/archive-pkg"
+
+
+def test_resolve_purl_uses_ref_override_when_download_location_is_whitespace():
+    pkg = {"name": "archive-pkg", "downloadLocation": "   ", "externalRefs": []}
+    assert resolve_purl(pkg, {"archive-pkg": "https://project.example/archive-pkg"}) == (
+        "https://project.example/archive-pkg"
+    )
+
+
+def test_resolve_purl_prefers_sbom_purl_and_download_over_ref_override():
+    overrides = {"pkg": "https://project.example/pkg"}
+    with_purl = {
+        "name": "pkg",
+        "downloadLocation": "https://download.example/pkg.zip",
+        "externalRefs": [{"referenceType": "purl",
+                          "referenceLocator": "pkg:maven/example/pkg@1.0"}],
+    }
+    with_download = {
+        "name": "pkg",
+        "downloadLocation": "https://download.example/pkg.zip",
+        "externalRefs": [],
+    }
+    assert resolve_purl(with_purl, overrides) == "pkg:maven/example/pkg@1.0"
+    assert resolve_purl(with_download, overrides) == "https://download.example/pkg.zip"
+
+
 def test_resolve_purpose_blanks_noassertion():
     assert resolve_purpose({"summary": "NOASSERTION"}) == ""
     assert resolve_purpose({"summary": "Does things"}) == "Does things"
@@ -348,7 +386,12 @@ def test_resolve_purpose_strips_emoji_from_summary():
 
 # ── purpose / reference overrides ────────────────────────────────────────────
 
-from sbom_lib import load_package_overrides, load_purpose_overrides, load_reference_overrides
+from sbom_lib import (
+    load_package_overrides,
+    load_purpose_overrides,
+    load_ref_overrides,
+    load_reference_overrides,
+)
 
 
 def test_load_package_overrides_returns_full_entries(tmp_path):
@@ -370,6 +413,43 @@ def test_load_purpose_and_reference_field_maps(tmp_path):
     ]}))
     assert load_purpose_overrides(str(p)) == {"a": "does A"}
     assert load_reference_overrides(str(p)) == {"b": "website=https://b.example"}
+
+
+def test_load_ref_overrides_keys_are_normalized(tmp_path):
+    path = tmp_path / "overrides.json"
+    path.write_text(json_module.dumps({"overrides": [
+        {"name": "Archive:Package", "ref": "https://example.org/package"},
+        {"name": "NoRef", "purpose": "no ref value"},
+    ]}))
+    assert load_ref_overrides(str(path)) == {
+        "archive:package": "https://example.org/package",
+    }
+
+
+def test_committed_ref_overrides_include_verified_source_urls():
+    overrides_path = Path(__file__).resolve().parent.parent / "config" / "license_overrides.json"
+    with overrides_path.open(encoding="utf-8") as f:
+        entries = json_module.load(f)["overrides"]
+    yalv_entries = [
+        entry for entry in entries
+        if entry["name"].strip().lower() == "com.github.lukepet:yalv"
+    ]
+    assert len(yalv_entries) == 1
+    assert yalv_entries[0].get("reference") == "website=https://github.com/LukePet/YALV"
+    assert yalv_entries[0]["license"] == "Apache-2.0"
+    assert yalv_entries[0]["source"] == "https://github.com/LukePet/YALV/blob/1.4.0.0/LICENSE"
+    assert yalv_entries[0]["purpose"] == "YALV! (Yet Another Log Viewer) for Log4Net and Serilog"
+
+    assert load_reference_overrides(str(overrides_path))["com.github.lukepet:yalv"] == (
+        "website=https://github.com/LukePet/YALV"
+    )
+    ref_overrides = load_ref_overrides(str(overrides_path))
+    for name, expected_url in {
+        "dcm4che": "https://github.com/dcm4che/dcm4che",
+        "dcmtk": "https://github.com/DCMTK/dcmtk",
+        "ffmpeg": "https://ffmpeg.org/",
+    }.items():
+        assert ref_overrides.get(name) == expected_url
 
 
 def test_resolve_purpose_override_wins_over_empty_summary():
@@ -399,6 +479,48 @@ def test_build_rows_uses_vendor_override_and_defaults_to_open_source():
     rows_by_name = {row["name"]: row for row in rows}
     assert rows_by_name["biz.videomed.tl4.tools:lang-manifest"]["vendor"] == "Baxter"
     assert rows_by_name["lodash"]["vendor"] == "Open Source"
+
+
+def test_build_rows_capitalizes_first_character_of_every_purpose():
+    packages = [
+        {"SPDXID": "SPDXRef-lower-summary", "name": "summary-pkg",
+         "versionInfo": "1", "supplier": "Organization: NPM",
+         "summary": "zlib port for javascript"},
+        {"SPDXID": "SPDXRef-lower-override", "name": "override-pkg",
+         "versionInfo": "1", "supplier": "Organization: NPM",
+         "summary": "NOASSERTION"},
+        {"SPDXID": "SPDXRef-upper-summary", "name": "uppercase-pkg",
+         "versionInfo": "1", "supplier": "Organization: NPM",
+         "summary": "Already Capitalized purpose"},
+    ]
+    rows, _, _ = build_rows(
+        packages, [], {},
+        purpose_overrides={"override-pkg": "http utility"},
+    )
+    purposes = {row["name"]: row["purpose"] for row in rows}
+    assert purposes == {
+        "summary-pkg": "Zlib port for javascript",
+        "override-pkg": "Http utility",
+        "uppercase-pkg": "Already Capitalized purpose",
+    }
+
+
+def test_build_rows_duplicate_prefers_sbom_purl_over_ref_fallback():
+    packages = [
+        {"SPDXID": "SPDXRef-first", "name": "duplicate-pkg", "versionInfo": "1.0",
+         "supplier": "Organization: NPM"},
+        {"SPDXID": "SPDXRef-second", "name": "duplicate-pkg", "versionInfo": "1.0",
+         "supplier": "Organization: NPM",
+         "externalRefs": [{"referenceType": "purl",
+                           "referenceLocator": "pkg:npm/duplicate-pkg@1.0"}]},
+    ]
+    rows, _, duplicates_merged = build_rows(
+        packages, [], {},
+        ref_overrides={"duplicate-pkg": "https://project.example/duplicate-pkg"},
+    )
+    assert duplicates_merged == 1
+    assert len(rows) == 1
+    assert rows[0]["ref"] == "pkg:npm/duplicate-pkg@1.0"
 
 
 def test_build_rows_joins_multiple_components_for_shared_package():
@@ -639,6 +761,59 @@ def test_build_excel_writes_expected_sheet_dimensions_and_content(tmp_path):
     assert "Test Product" in ws2.cell(1, 1).value
 
 
+def test_build_excel_uses_ref_override_for_ref_column(tmp_path):
+    packages = [
+        {"SPDXID": "SPDXRef-example", "name": "Archive-Pkg", "versionInfo": "1.0",
+         "supplier": "Organization: Maven", "licenseDeclared": "MIT",
+         "downloadLocation": "NOASSERTION", "externalRefs": []},
+    ]
+    sbom = _write_sbom(tmp_path, packages, [])
+    overrides_path = tmp_path / "overrides.json"
+    overrides_path.write_text(json_module.dumps({"overrides": [
+        {"name": "archive-pkg", "ref": "https://project.example/archive-pkg"},
+    ]}))
+    out = str(tmp_path / "out.xlsx")
+
+    build_excel(
+        sbom_path=sbom,
+        template_path=OSS_TEMPLATE,
+        output_path=out,
+        license_overrides_path=str(overrides_path),
+    )
+
+    ws = _openpyxl.load_workbook(out)["Dependencies (OTS SOUP)"]
+    assert ws.cell(2, 10).value == "https://project.example/archive-pkg"
+
+
+def test_build_excel_uses_ref_override_for_archive_without_purl(tmp_path):
+    package = {
+        "SPDXID": "SPDXRef-archive",
+        "name": "dcm4che",
+        "versionInfo": "5.34.3",
+        "supplier": "Organization: FOSSA (Archive)",
+        "downloadLocation": "NOASSERTION",
+        "homepage": "NOASSERTION",
+        "externalRefs": [],
+        "licenseDeclared": "NONE",
+        "summary": "Project uploaded via CLI license scan",
+    }
+    sbom = _write_sbom(tmp_path, [package])
+    overrides = tmp_path / "overrides.json"
+    overrides.write_text(json_module.dumps({"overrides": [
+        {"name": "dcm4che", "ref": "https://github.com/dcm4che/dcm4che"},
+    ]}))
+    output = tmp_path / "oss.xlsx"
+
+    build_excel(sbom, OSS_TEMPLATE, str(output),
+                license_overrides_path=str(overrides))
+
+    workbook = _openpyxl.load_workbook(output, read_only=True, data_only=True)
+    dependencies = workbook["Dependencies (OTS SOUP)"]
+    assert dependencies.cell(2, 1).value == "dcm4che"
+    assert dependencies.cell(2, 10).value == "https://github.com/dcm4che/dcm4che"
+    workbook.close()
+
+
 def test_build_excel_classifies_configured_first_party_artifacts_as_dependencies(tmp_path):
     dependency_names = [
         "biz.videomed.t4.tools:lang-manifest",
@@ -784,10 +959,63 @@ def test_build_excel_applies_oss_deps_only_exclusions_by_default(tmp_path):
     assert names == ["hel-app"]
 
 
+def test_build_excel_attributes_dependencies_to_excluded_components(tmp_path):
+    packages = [
+        {"SPDXID": "SPDXRef-invalidated", "name": "hel-invalidated-tokens-api",
+         "versionInfo": "1.0", "supplier": "Organization: Baxter"},
+        {"SPDXID": "SPDXRef-broker", "name": "hel-nms-broker-api",
+         "versionInfo": "1.0", "supplier": "Organization: Baxter"},
+        {"SPDXID": "SPDXRef-annotations", "name": "annotations-api",
+         "versionInfo": "6.0.53", "supplier": "Organization: Maven",
+         "externalRefs": [{"referenceType": "purl",
+                           "referenceLocator": "pkg:maven/org.apache.tomcat/annotations-api@6.0.53"}]},
+        {"SPDXID": "SPDXRef-jackson-annotations", "name": "Jackson-annotations",
+         "versionInfo": "2.21", "supplier": "Organization: Maven",
+         "externalRefs": [{"referenceType": "purl",
+                           "referenceLocator": "pkg:maven/com.fasterxml.jackson.core/jackson-annotations@2.21"}]},
+        {"SPDXID": "SPDXRef-jackson-core", "name": "Jackson-core",
+         "versionInfo": "3.1.5", "supplier": "Organization: Maven",
+         "externalRefs": [{"referenceType": "purl",
+                           "referenceLocator": "pkg:maven/tools.jackson.core/jackson-core@3.1.5"}]},
+    ]
+    relationships = [
+        {"spdxElementId": "SPDXRef-invalidated", "relationshipType": "DEPENDS_ON",
+         "relatedSpdxElement": "SPDXRef-annotations"},
+        {"spdxElementId": "SPDXRef-jackson-annotations", "relationshipType": "DEPENDENCY_OF",
+         "relatedSpdxElement": "SPDXRef-broker"},
+        {"spdxElementId": "SPDXRef-broker", "relationshipType": "DEPENDS_ON",
+         "relatedSpdxElement": "SPDXRef-jackson-core"},
+    ]
+    sbom = _write_sbom(tmp_path, packages, relationships)
+    output = tmp_path / "oss.xlsx"
+
+    build_excel(sbom, OSS_TEMPLATE, str(output))
+
+    workbook = _openpyxl.load_workbook(output, read_only=True, data_only=True)
+    dependencies = workbook["Dependencies (OTS SOUP)"]
+    attribution = {
+        dependencies.cell(row, 1).value: dependencies.cell(row, 9).value
+        for row in range(2, dependencies.max_row + 1)
+    }
+    assert attribution == {
+        "annotations-api": "hel-invalidated-tokens-api",
+        "Jackson-annotations": "hel-nms-broker-api",
+        "Jackson-core": "hel-nms-broker-api",
+    }
+    components = workbook["SW-SYS Components (Ref-only)"]
+    component_names = [
+        components.cell(row, 1).value
+        for row in range(3, components.max_row + 1)
+        if components.cell(row, 1).value
+    ]
+    assert component_names == []
+    workbook.close()
+
+
 def test_build_excel_applies_first_party_library_metadata(tmp_path):
     expected = {
         "biz.videomed.tl4.tools:lang-manifest": (
-            "proper listing of supported languages for selection from configuration tool",
+            "Proper listing of supported languages for selection from configuration tool",
             "https://repo1.maven.org/maven2/biz/videomed/tl4/tools/lang-manifest/",
         ),
         "biz.videomed.tl4.tools:LDBootloader": (
@@ -795,11 +1023,11 @@ def test_build_excel_applies_first_party_library_metadata(tmp_path):
             "https://repo1.maven.org/maven2/biz/videomed/tl4/tools/LDBootloader/",
         ),
         "biz.videomed.tl4.tools:SystemTest": (
-            "low level interaction with VMBoards for service or test",
+            "Low level interaction with VMBoards for service or test",
             "https://repo1.maven.org/maven2/biz/videomed/tl4/tools/SystemTest/",
         ),
         "biz.videomed.tl4.tools:SerialTest": (
-            "low level interaction with control ports for service or test",
+            "Low level interaction with control ports for service or test",
             "https://repo1.maven.org/maven2/biz/videomed/tl4/tools/SerialTest/",
         ),
     }

@@ -158,6 +158,11 @@ def load_reference_overrides(path: str | None) -> dict[str, str]:
     return _override_field_map(path, "reference")
 
 
+def load_ref_overrides(path: str | None) -> dict[str, str]:
+    """Curated per-package Ref fallbacks: {name.lower().strip(): ref}."""
+    return _override_field_map(path, "ref")
+
+
 def load_vendor_overrides(path: str | None) -> dict[str, str]:
     """Curated per-package vendor overrides: {name.lower().strip(): vendor}."""
     return _override_field_map(path, "vendor")
