@@ -169,6 +169,18 @@ def load_vendor_overrides(path: str | None) -> dict[str, str]:
     return _override_field_map(path, "vendor")
 
 
+def load_filename_overrides(path: str | None) -> dict[str, str]:
+    """Curated per-package file name overrides: {name.lower().strip(): filename}.
+
+    For packages FOSSA records with no `downloadLocation`/purl at all (e.g.
+    vendored binary archives scanned via `fossa analyze --archive`), there's
+    no data in the SBOM to derive `packageFileName` from — the curated entry
+    is the only remaining source, based on the project's well-known public
+    distribution file name for that exact version.
+    """
+    return _override_field_map(path, "filename")
+
+
 def _short_artifact_name(name: str) -> str:
     """Last path segment of a package name: the part after the final ':' or '/'.
 
@@ -476,22 +488,27 @@ def _filename_from_purl(pkg: dict) -> str | None:
     return None
 
 
-def populate_package_filenames(spdx: dict) -> dict:
+def populate_package_filenames(spdx: dict, filename_overrides: dict[str, str] | None = None) -> dict:
     """Return a copy of an SPDX doc with `packageFileName` filled in wherever
-    it is missing, from `downloadLocation` or, failing that, from the purl.
+    it is missing, from `downloadLocation`, a purl, or a curated override.
 
     FOSSA only sets `packageFileName` on each project's own root package (to
     its FOSSA project locator); dependency packages carry no
-    `packageFileName`. Two sources are tried in order:
+    `packageFileName`. Three sources are tried in order:
       1. `downloadLocation`'s last path segment, when it is a real URL (e.g.
          ".../commons-lang3-3.18.0-sources.jar");
       2. the ecosystem's conventional artifact name derived from the
          package's purl (see `_filename_from_purl`), for registry-resolved
          dependencies that have no download URL at all (`downloadLocation`
-         is `NOASSERTION`/`NONE`/empty).
-    Leaves packages with neither source untouched. Never overwrites an
+         is `NOASSERTION`/`NONE`/empty);
+      3. `filename_overrides` (see `load_filename_overrides`), keyed by
+         `name.strip().lower()`, for packages with neither a download URL
+         nor a purl (e.g. vendored binary archives scanned via `fossa
+         analyze --archive`, which FOSSA records with no origin data at all).
+    Leaves packages with none of the above untouched. Never overwrites an
     existing `packageFileName`. The input doc is not mutated.
     """
+    filename_overrides = filename_overrides or {}
     packages = spdx.get("packages", []) or []
     new_pkgs = []
     changed = False
@@ -507,6 +524,9 @@ def populate_package_filenames(spdx: dict) -> dict:
                 filename = urllib.parse.unquote(path_tail)
         if not filename:
             filename = _filename_from_purl(pkg)
+        if not filename:
+            name = (pkg.get("name") or "").strip().lower()
+            filename = filename_overrides.get(name)
         if not filename:
             new_pkgs.append(pkg)
             continue

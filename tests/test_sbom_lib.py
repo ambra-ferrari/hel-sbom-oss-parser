@@ -16,6 +16,7 @@ from sbom_lib import (
     is_excluded_component,
     load_component_aliases,
     load_excluded_components,
+    load_filename_overrides,
     normalize_purpose_text,
     populate_document_describes,
     populate_package_filenames,
@@ -630,3 +631,37 @@ def test_populate_package_filenames_skips_unresolvable_purl_type():
     ]}
     out = populate_package_filenames(doc)
     assert "packageFileName" not in out["packages"][0]
+
+
+def test_populate_package_filenames_falls_back_to_curated_override(tmp_path):
+    overrides_path = tmp_path / "overrides.json"
+    overrides_path.write_text(json.dumps({"overrides": [
+        {"name": "ffmpeg", "filename": "ffmpeg-8.1.1.tar.xz"},
+    ]}), encoding="utf-8")
+    overrides = load_filename_overrides(str(overrides_path))
+    doc = {"packages": [
+        {"SPDXID": "SPDXRef-1", "name": "ffmpeg", "downloadLocation": "NOASSERTION",
+         "externalRefs": []},
+    ]}
+    out = populate_package_filenames(doc, overrides)
+    assert out["packages"][0]["packageFileName"] == "ffmpeg-8.1.1.tar.xz"
+
+
+def test_populate_package_filenames_override_is_last_resort_after_purl():
+    doc = {"packages": [
+        {"SPDXID": "SPDXRef-1", "name": "cc.nssm:nssm", "downloadLocation": "NOASSERTION",
+         "externalRefs": [{"referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl",
+                            "referenceLocator": "pkg:maven/cc.nssm/nssm@2.24"}]},
+    ]}
+    out = populate_package_filenames(doc, {"cc.nssm:nssm": "should-not-be-used.zip"})
+    assert out["packages"][0]["packageFileName"] == "nssm-2.24.jar"
+
+
+def test_load_filename_overrides_skips_entries_without_filename(tmp_path):
+    overrides_path = tmp_path / "overrides.json"
+    overrides_path.write_text(json.dumps({"overrides": [
+        {"name": "dcmtk", "filename": "dcmtk-3.7.0.tar.gz"},
+        {"name": "no-filename-here", "purpose": "whatever"},
+    ]}), encoding="utf-8")
+    overrides = load_filename_overrides(str(overrides_path))
+    assert overrides == {"dcmtk": "dcmtk-3.7.0.tar.gz"}

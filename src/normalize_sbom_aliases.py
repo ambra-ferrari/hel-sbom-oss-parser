@@ -21,7 +21,10 @@ writes a new SPDX JSON where:
     real package, with no license/checksum/filename of their own) are
     dropped, along with every relationship that references them;
   - every package missing `packageFileName` has one derived from its
-    `downloadLocation` URL's last path segment, where resolvable;
+    `downloadLocation` URL's last path segment, or its purl's conventional
+    artifact name, or (last resort) a curated override in the package-
+    overrides map (config/license_overrides.json, 'filename' field) for
+    packages with neither;
   - the document's top-level `name` is overridden with a static, configurable
     value (OSS_SBOM_DOCUMENT_NAME in fossa.config, or --document-name), since
     FOSSA derives it from the release-group/release ids/titles (e.g.
@@ -49,6 +52,7 @@ from sbom_lib import (
     ensure_person_creator,
     load_component_aliases,
     load_excluded_components,
+    load_filename_overrides,
     populate_document_describes,
     populate_package_filenames,
     remove_excluded_packages,
@@ -74,6 +78,11 @@ def main() -> None:
                     help="Path to the curated component-alias JSON map")
     ap.add_argument("--excluded-components", default=cfg.get("OSS_EXCLUDED_COMPONENTS"),
                     help="Path to the curated excluded-components JSON map")
+    ap.add_argument("--filename-overrides", default=cfg.get("OSS_LICENSE_OVERRIDES"),
+                    help="Path to the curated package-overrides JSON map "
+                         "('filename' entries), used as a last-resort source "
+                         "for packages with neither a downloadLocation nor a "
+                         "purl (e.g. vendored binary archives)")
     ap.add_argument("--document-name", default=cfg.get("OSS_SBOM_DOCUMENT_NAME"),
                     help="Static name to set as the SPDX document's top-level "
                          "'name' field, overriding the FOSSA-derived release "
@@ -91,6 +100,7 @@ def main() -> None:
 
     aliases = load_component_aliases(args.component_aliases)
     excluded = load_excluded_components(args.excluded_components)
+    filename_overrides = load_filename_overrides(args.filename_overrides)
 
     aliased = apply_component_aliases(spdx, aliases)
     deduped = dedupe_first_party_packages(aliased)
@@ -106,7 +116,7 @@ def main() -> None:
     cpe_fixed = drop_invalid_cpe_refs(named)
     licensed = declare_license_refs(cpe_fixed)
     described = populate_document_describes(licensed)
-    filenamed = populate_package_filenames(described)
+    filenamed = populate_package_filenames(described, filename_overrides)
     out = ensure_person_creator(filenamed, args.sbom_author)
 
     with open(args.output, "w", encoding="utf-8") as f:
