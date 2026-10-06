@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from sbom_lib import (
     apply_component_aliases,
+    apply_license_overrides,
     canonical_component_name,
     declare_license_refs,
     dedupe_first_party_packages,
@@ -451,6 +452,71 @@ def test_declare_license_refs_noop_without_refs():
     spdx = {"packages": [{"licenseConcluded": "MIT", "licenseDeclared": "Apache-2.0"}]}
     out = declare_license_refs(spdx)
     assert "hasExtractedLicensingInfos" not in out
+
+
+# ── apply_license_overrides ──────────────────────────────────────────────────
+
+def test_apply_license_overrides_fills_missing_license():
+    spdx = {"packages": [
+        {"name": "cc.nssm:nssm", "licenseDeclared": "NONE",
+         "licenseConcluded": "NOASSERTION"},
+    ]}
+    out = apply_license_overrides(spdx, {"cc.nssm:nssm": "LicenseRef-Public-Domain"})
+    assert out["packages"][0]["licenseDeclared"] == "LicenseRef-Public-Domain"
+    # licenseConcluded is a FOSSA scan result, not a curated declaration —
+    # left untouched.
+    assert out["packages"][0]["licenseConcluded"] == "NOASSERTION"
+
+
+def test_apply_license_overrides_wins_over_existing_declared_license():
+    spdx = {"packages": [
+        {"name": "fo-dicom", "licenseDeclared": "NOASSERTION"},
+    ]}
+    out = apply_license_overrides(spdx, {"fo-dicom": "MIT"})
+    assert out["packages"][0]["licenseDeclared"] == "MIT"
+
+
+def test_apply_license_overrides_matches_name_case_insensitively():
+    spdx = {"packages": [{"name": "Fo-Dicom.Desktop", "licenseDeclared": "NONE"}]}
+    out = apply_license_overrides(spdx, {"fo-dicom.desktop": "MIT"})
+    assert out["packages"][0]["licenseDeclared"] == "MIT"
+
+
+def test_apply_license_overrides_leaves_unmatched_packages_untouched():
+    spdx = {"packages": [{"name": "some-other-package", "licenseDeclared": "NONE"}]}
+    out = apply_license_overrides(spdx, {"cc.nssm:nssm": "LicenseRef-Public-Domain"})
+    assert out["packages"][0]["licenseDeclared"] == "NONE"
+
+
+def test_apply_license_overrides_noop_without_overrides():
+    spdx = {"packages": [{"name": "cc.nssm:nssm", "licenseDeclared": "NONE"}]}
+    out = apply_license_overrides(spdx, {})
+    assert out is spdx
+
+
+def test_apply_license_overrides_slugs_free_text_label_into_licenseref():
+    # Curated entries like "internally developed" are plain human-readable
+    # labels, not valid SPDX license expressions - passing them through
+    # verbatim fails SPDX semantic validation ("Unrecognized license
+    # reference"). They must be coerced into a LicenseRef-* token so
+    # declare_license_refs can declare it.
+    spdx = {"packages": [{"name": "biz.videomed.tl4.tools:lang-manifest"}]}
+    out = apply_license_overrides(
+        spdx, {"biz.videomed.tl4.tools:lang-manifest": "internally developed"}
+    )
+    assert out["packages"][0]["licenseDeclared"] == "LicenseRef-Internally-Developed"
+
+
+def test_apply_license_overrides_leaves_valid_spdx_expressions_untouched():
+    spdx = {"packages": [{"name": "com.bellswjdk.hotspot:jre"}]}
+    out = apply_license_overrides(
+        spdx,
+        {"com.bellswjdk.hotspot:jre": "GPL-2.0-only WITH Classpath-exception-2.0"},
+    )
+    assert (
+        out["packages"][0]["licenseDeclared"]
+        == "GPL-2.0-only WITH Classpath-exception-2.0"
+    )
 
 
 # ── populate_document_describes ─────────────────────────────────────────────

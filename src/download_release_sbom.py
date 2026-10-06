@@ -329,6 +329,29 @@ def add_cpe_refs(spdx: dict[str, Any]) -> dict[str, Any]:
     return spdx
 
 
+def _normalize_tool_creator(text: str) -> str:
+    """Rewrite a space-separated 'Tool: <name> <version>' creator to the
+    hyphenated 'Tool: <name>-<version>' form CISA 2026 checkers expect.
+
+    FOSSA itself emits the real tool/version as free text with no fixed
+    separator convention — some exports use 'Tool: fossa-cli-1.2.3' (already
+    hyphenated, a no-op here), others use 'Tool: FOSSA 4.34.133' (space-
+    separated). A CISA 2026 checker split version from name
+    by looking for a trailing '-<version>' suffix, so a space-separated
+    creator reads as "no version at all" and fails "SBOM Tool Version"
+    despite the real version being present in the string. Only rewrites
+    when a trailing numeric version is found after whitespace; leaves
+    anything else (including the no-version fallback) unchanged.
+    """
+    match = re.match(
+        r"^(Tool:\s*)(\S(?:.*\S)?)\s+([0-9]+(?:\.[0-9]+)+(?:[-+][\w.]*)?)$", text
+    )
+    if not match:
+        return text
+    prefix, name, version = match.groups()
+    return f"{prefix}{name}-{version}"
+
+
 def _pick_tool_creator(docs: list[tuple[str, dict[str, Any]]]) -> str:
     """Return the most informative ``Tool:`` creator found across source docs.
 
@@ -337,7 +360,9 @@ def _pick_tool_creator(docs: list[tuple[str, dict[str, Any]]]) -> str:
     ``Tool: fossa-cli-<version>`` string used to generate it (CISA 2026
     minimum elements requires the tool *version* to be present). Prefer the
     first creator that includes a version suffix; fall back to the bare
-    ``"Tool: fossa-cli"`` only if no source doc reports one.
+    ``"Tool: fossa-cli"`` only if no source doc reports one. Normalized via
+    `_normalize_tool_creator` so a space-separated name/version (as FOSSA
+    sometimes emits) is still recognized as having a version.
     """
     fallback = "Tool: fossa-cli"
     for _, doc in docs:
@@ -346,7 +371,7 @@ def _pick_tool_creator(docs: list[tuple[str, dict[str, Any]]]) -> str:
             if not text.lower().startswith("tool:"):
                 continue
             if text.lower() != fallback.lower():
-                return text
+                return _normalize_tool_creator(text)
             fallback = text
     return fallback
 

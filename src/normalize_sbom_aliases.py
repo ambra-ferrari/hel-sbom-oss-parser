@@ -46,6 +46,7 @@ from pathlib import Path
 
 from sbom_lib import (
     apply_component_aliases,
+    apply_license_overrides,
     declare_license_refs,
     dedupe_first_party_packages,
     drop_invalid_cpe_refs,
@@ -53,6 +54,7 @@ from sbom_lib import (
     load_component_aliases,
     load_excluded_components,
     load_filename_overrides,
+    load_license_overrides,
     populate_document_describes,
     populate_package_filenames,
     remove_excluded_packages,
@@ -101,6 +103,7 @@ def main() -> None:
     aliases = load_component_aliases(args.component_aliases)
     excluded = load_excluded_components(args.excluded_components)
     filename_overrides = load_filename_overrides(args.filename_overrides)
+    license_overrides = load_license_overrides(args.filename_overrides)
 
     aliased = apply_component_aliases(spdx, aliases)
     deduped = dedupe_first_party_packages(aliased)
@@ -111,10 +114,13 @@ def main() -> None:
     # aren't dragged down by packages with no real data to carry.
     completed = remove_incomplete_dependencies(excluded_out)
     named = set_document_name(completed, args.document_name)
-    # SPDX 2.3 conformance: drop malformed CPE refs, declare used LicenseRefs,
-    # surface described products, and record the responsible author.
+    # SPDX 2.3 conformance: drop malformed CPE refs, fill in curated license
+    # overrides (same authoritative source already used for the Excel/CSV
+    # deliverables), declare used LicenseRefs, surface described products,
+    # and record the responsible author.
     cpe_fixed = drop_invalid_cpe_refs(named)
-    licensed = declare_license_refs(cpe_fixed)
+    overridden = apply_license_overrides(cpe_fixed, license_overrides)
+    licensed = declare_license_refs(overridden)
     described = populate_document_describes(licensed)
     filenamed = populate_package_filenames(described, filename_overrides)
     out = ensure_person_creator(filenamed, args.sbom_author)

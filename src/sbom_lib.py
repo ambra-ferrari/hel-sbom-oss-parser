@@ -675,6 +675,76 @@ def drop_invalid_cpe_refs(spdx: dict) -> dict:
     return out
 
 
+def _coerce_to_license_token(value: str) -> str:
+    """Coerce a curated override's license text into a valid SPDX license
+    expression / `LicenseRef-*` token.
+
+    Most curated `license` entries are already valid SPDX identifiers or
+    expressions (`MIT`, `BSD-2-Clause`, `GPL-2.0-only WITH
+    Classpath-exception-2.0`) or already-prefixed `LicenseRef-*` tokens
+    (`LicenseRef-Public-Domain`) — real SPDX ids/operators always include an
+    uppercase letter or digit. A few entries are plain human-readable labels
+    for first-party/internal components with no applicable open-source
+    license at all (e.g. `"internally developed"`) — these are not valid
+    SPDX license expressions, so passing them straight into
+    `licenseDeclared` fails SPDX semantic validation
+    (`Unrecognized license reference`). Detected by being entirely
+    lowercase with no digit; such values are slugged into a `LicenseRef-*`
+    token (e.g. `"internally developed"` -> `"LicenseRef-Internally-Developed"`)
+    so `declare_license_refs` can declare it like any other LicenseRef.
+    """
+    if not value or value.lower().startswith("licenseref-"):
+        return value
+    if value == value.lower() and not any(ch.isdigit() for ch in value):
+        slug = "-".join(w.capitalize() for w in value.strip().split())
+        return f"LicenseRef-{slug}"
+    return value
+
+
+def apply_license_overrides(
+    spdx: dict, license_overrides: dict[str, str] | None = None
+) -> dict:
+    """Return a copy of an SPDX doc with `licenseDeclared` set from curated
+    overrides wherever one is available, by package name.
+
+    `sbom_to_oss_dependencies.resolve_license` already treats a curated
+    override as the authoritative answer, ahead of FOSSA's own scan result,
+    because these entries exist specifically for packages FOSSA could not
+    license-scan (vendored archives, proprietary first-party components,
+    dependencies whose license FOSSA left as `NONE`/`NOASSERTION`). The
+    machine-readable deliverable previously never consulted this same
+    curated data, so every one of those packages reported no license at all
+    to downstream SBOM checkers even though the correct answer was already
+    known and used in the Excel/CSV deliverables.
+
+    Mirrors that same override-wins priority here: any package whose name
+    matches a curated entry gets `licenseDeclared` set to the override value
+    (passed through `_coerce_to_license_token` so free-text labels become a
+    valid SPDX token), regardless of its current value. `licenseConcluded`
+    is left untouched (curated overrides are a declared/attested answer, not
+    a FOSSA-style concluded scan result). Call this before
+    `declare_license_refs` so any `LicenseRef-*` override value gets its
+    required extracted-licensing-info entry declared automatically. The
+    input doc is not mutated.
+    """
+    license_overrides = license_overrides or {}
+    if not license_overrides:
+        return spdx
+    out = dict(spdx)
+    packages = []
+    for pkg in spdx.get("packages", []) or []:
+        name = (pkg.get("name") or "").strip().lower()
+        override = license_overrides.get(name)
+        if override:
+            p = dict(pkg)
+            p["licenseDeclared"] = _coerce_to_license_token(override)
+            packages.append(p)
+        else:
+            packages.append(pkg)
+    out["packages"] = packages
+    return out
+
+
 _LICENSEREF_TOKEN = re.compile(r"LicenseRef-[0-9A-Za-z.\-]+")
 
 

@@ -30,6 +30,28 @@ def test_merge_spdx_falls_back_to_bare_tool_name_without_source_version():
     assert "Tool: fossa-cli" in merged["creationInfo"]["creators"]
 
 
+def test_merge_spdx_hyphenates_space_separated_tool_version():
+    # FOSSA's live attribution API sometimes emits "Tool: NAME VERSION"
+    # (space-separated) instead of the hyphenated "Tool: name-version"
+    # convention CISA 2026's checker heuristic expects to split on.
+    doc = {"spdxVersion": "SPDX-2.3", "packages": [], "files": [],
+           "relationships": [], "documentDescribes": [],
+           "creationInfo": {"creators": ["Organization: FOSSA",
+                                          "Tool: FOSSA 4.34.133"]}}
+    merged = merge_spdx([("proj", doc)], "Test Doc")
+    assert "Tool: FOSSA-4.34.133" in merged["creationInfo"]["creators"]
+    assert "Tool: FOSSA 4.34.133" not in merged["creationInfo"]["creators"]
+
+
+def test_merge_spdx_leaves_already_hyphenated_tool_version_untouched():
+    doc = {"spdxVersion": "SPDX-2.3", "packages": [], "files": [],
+           "relationships": [], "documentDescribes": [],
+           "creationInfo": {"creators": ["Organization: FOSSA",
+                                          "Tool: fossa-cli-3.9.44"]}}
+    merged = merge_spdx([("proj", doc)], "Test Doc")
+    assert "Tool: fossa-cli-3.9.44" in merged["creationInfo"]["creators"]
+
+
 from download_release_sbom import purl_to_coordinate
 
 
