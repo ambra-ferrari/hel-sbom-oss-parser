@@ -37,6 +37,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from sbom_lib import filter_direct_dependencies
+
 
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
@@ -254,62 +256,12 @@ def filter_test(
 def filter_direct(spdx: dict[str, Any]) -> dict[str, Any]:
     """Reduce a project's SPDX to its root(s) + their *direct* dependencies.
 
-    FOSSA encodes the graph as: SPDXRef-DOCUMENT --DESCRIBES--> <project root>,
-    then <root> --DEPENDS_ON--> <dep> for every dependency (direct and, via
-    dep->dep edges, transitive). A dependency is *direct* when the project root
-    depends on it directly. Everything only reachable through another dependency
-    is transitive and is dropped.
+    The graph-walking logic lives in ``sbom_lib.filter_direct_dependencies``,
+    shared with ``sbom_to_excel.py`` so both the downloaded machine-readable
+    SBOM and the official SBOM Excel consistently report direct-only
+    dependencies.
     """
-    rels = spdx.get("relationships", []) or []
-    pkgs = spdx.get("packages", []) or []
-
-    roots: set[str] = {
-        r.get("relatedSpdxElement", "")
-        for r in rels
-        if r.get("relationshipType") == "DESCRIBES"
-    }
-    roots.update(spdx.get("documentDescribes", []) or [])
-    roots.discard("")
-
-    if not roots:
-        # No identifiable root — cannot tell direct from transitive; keep as-is.
-        return spdx
-
-    direct: set[str] = set()
-    for r in rels:
-        rtype = r.get("relationshipType")
-        if rtype == "DEPENDS_ON" and r.get("spdxElementId") in roots:
-            direct.add(r.get("relatedSpdxElement", ""))
-        elif rtype == "DEPENDENCY_OF" and r.get("relatedSpdxElement") in roots:
-            direct.add(r.get("spdxElementId", ""))
-    direct.discard("")
-
-    keep = roots | direct
-    new_pkgs = []
-    for pkg in pkgs:
-        if pkg.get("SPDXID") in keep:
-            p = dict(pkg)
-            p.pop("hasFiles", None)  # file-level detail is not needed at dep level
-            new_pkgs.append(p)
-
-    new_rels = []
-    for r in rels:
-        rtype = r.get("relationshipType")
-        a, b = r.get("spdxElementId"), r.get("relatedSpdxElement")
-        if rtype == "DESCRIBES" and b in roots:
-            new_rels.append(r)
-        elif rtype == "DEPENDS_ON" and a in roots and b in direct:
-            new_rels.append(r)
-        elif rtype == "DEPENDENCY_OF" and b in roots and a in direct:
-            new_rels.append(r)
-
-    out = dict(spdx)
-    out["packages"] = new_pkgs
-    out["relationships"] = new_rels
-    out.pop("files", None)
-    if "documentDescribes" in out:
-        out["documentDescribes"] = [d for d in out["documentDescribes"] if d in roots]
-    return out
+    return filter_direct_dependencies(spdx)
 
 
 def purl_to_coordinate(purl: str) -> str | None:
@@ -377,6 +329,28 @@ def add_cpe_refs(spdx: dict[str, Any]) -> dict[str, Any]:
     return spdx
 
 
+def _pick_tool_creator(docs: list[tuple[str, dict[str, Any]]]) -> str:
+    """Return the most informative ``Tool:`` creator found across source docs.
+
+    Each per-project SPDX-JSON attribution report downloaded from FOSSA
+    carries its own ``creationInfo.creators`` with the exact
+    ``Tool: fossa-cli-<version>`` string used to generate it (CISA 2026
+    minimum elements requires the tool *version* to be present). Prefer the
+    first creator that includes a version suffix; fall back to the bare
+    ``"Tool: fossa-cli"`` only if no source doc reports one.
+    """
+    fallback = "Tool: fossa-cli"
+    for _, doc in docs:
+        for creator in (doc.get("creationInfo", {}) or {}).get("creators", []) or []:
+            text = str(creator).strip()
+            if not text.lower().startswith("tool:"):
+                continue
+            if text.lower() != fallback.lower():
+                return text
+            fallback = text
+    return fallback
+
+
 def merge_spdx(
     docs: list[tuple[str, dict[str, Any]]],
     doc_name: str,
@@ -425,8 +399,7 @@ def merge_spdx(
         "created": now,
         "creators": [
             "Organization: Baxter",
-            "Tool: fossa-cli",
-            "Tool: sbom-parser-download_release_sbom",
+            _pick_tool_creator(docs),
         ],
     }
 
@@ -505,7 +478,9 @@ def main() -> None:
     rg_id = pick(args.release_group_id, cfg.get("FOSSA_RELEASE_GROUP_ID"))
     rel_id = pick(args.release_id, cfg.get("FOSSA_RELEASE_ID"))
 
-    # Direct-only is the default; config DIRECT_ONLY / --all-deps can turn it off.
+    # Direct-only is the default (applies to both the machine-readable SBOM
+    # and the official SBOM Excel); config DIRECT_ONLY / --all-deps can turn
+    # it off.
     if args.direct_only is not None:
         direct_only = args.direct_only
     else:

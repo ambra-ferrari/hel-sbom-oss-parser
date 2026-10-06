@@ -7,13 +7,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from sbom_lib import (
     apply_component_aliases,
     canonical_component_name,
+    declare_license_refs,
     dedupe_first_party_packages,
+    drop_invalid_cpe_refs,
+    ensure_person_creator,
+    filter_direct_dependencies,
     first_party_artifact_key,
     is_excluded_component,
     load_component_aliases,
     load_excluded_components,
     normalize_purpose_text,
+    populate_document_describes,
+    populate_package_filenames,
     remove_excluded_packages,
+    remove_incomplete_dependencies,
     set_document_name,
 )
 
@@ -373,3 +380,253 @@ def test_set_document_name_noop_when_name_falsy():
     spdx = {"name": "561 / current (aggregated)", "packages": [], "relationships": []}
     assert set_document_name(spdx, None)["name"] == "561 / current (aggregated)"
     assert set_document_name(spdx, "")["name"] == "561 / current (aggregated)"
+
+
+# ── drop_invalid_cpe_refs (SPDX 2.3 CPE conformance) ────────────────────────
+
+def _pkg_with_refs(refs):
+    return {"SPDXID": "SPDXRef-a", "name": "x", "versionInfo": "1",
+            "externalRefs": refs}
+
+
+def test_drop_invalid_cpe_refs_removes_maven_coordinate():
+    spdx = {"packages": [_pkg_with_refs([
+        {"referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl",
+         "referenceLocator": "pkg:maven/cc.nssm/nssm@2.24"},
+        {"referenceCategory": "SECURITY", "referenceType": "cpe23Type",
+         "referenceLocator": "cc.nssm:nssm"},
+    ])]}
+    out = drop_invalid_cpe_refs(spdx)
+    types = [r["referenceType"] for r in out["packages"][0]["externalRefs"]]
+    assert types == ["purl"]
+
+
+def test_drop_invalid_cpe_refs_keeps_valid_cpe23():
+    cpe = "cpe:2.3:a:apache:log4j:2.17.1:*:*:*:*:*:*:*"
+    spdx = {"packages": [_pkg_with_refs([
+        {"referenceType": "cpe23Type", "referenceLocator": cpe}])]}
+    out = drop_invalid_cpe_refs(spdx)
+    assert out["packages"][0]["externalRefs"][0]["referenceLocator"] == cpe
+
+
+def test_drop_invalid_cpe_refs_drops_externalrefs_key_when_empty():
+    spdx = {"packages": [_pkg_with_refs([
+        {"referenceType": "cpe23Type", "referenceLocator": "a:b"}])]}
+    out = drop_invalid_cpe_refs(spdx)
+    assert "externalRefs" not in out["packages"][0]
+
+
+def test_drop_invalid_cpe_refs_does_not_mutate_input():
+    spdx = {"packages": [_pkg_with_refs([
+        {"referenceType": "cpe23Type", "referenceLocator": "a:b"}])]}
+    drop_invalid_cpe_refs(spdx)
+    assert spdx["packages"][0]["externalRefs"]
+
+
+# ── declare_license_refs (SPDX 2.3 LicenseRef declaration) ──────────────────
+
+def test_declare_license_refs_declares_used_refs():
+    spdx = {"packages": [
+        {"licenseConcluded": "LicenseRef-MIT-123456", "licenseDeclared": "NONE"},
+        {"licenseInfoFromFiles": ["LicenseRef-proprietary-license"]},
+    ]}
+    out = declare_license_refs(spdx)
+    ids = {e["licenseId"] for e in out["hasExtractedLicensingInfos"]}
+    assert ids == {"LicenseRef-MIT-123456", "LicenseRef-proprietary-license"}
+    for e in out["hasExtractedLicensingInfos"]:
+        assert e["extractedText"]  # required by SPDX
+
+
+def test_declare_license_refs_preserves_existing_and_is_idempotent():
+    spdx = {"packages": [{"licenseConcluded": "LicenseRef-MIT"}],
+            "hasExtractedLicensingInfos": [
+                {"licenseId": "LicenseRef-MIT", "extractedText": "custom"}]}
+    out = declare_license_refs(spdx)
+    assert len(out["hasExtractedLicensingInfos"]) == 1
+    assert out["hasExtractedLicensingInfos"][0]["extractedText"] == "custom"
+
+
+def test_declare_license_refs_noop_without_refs():
+    spdx = {"packages": [{"licenseConcluded": "MIT", "licenseDeclared": "Apache-2.0"}]}
+    out = declare_license_refs(spdx)
+    assert "hasExtractedLicensingInfos" not in out
+
+
+# ── populate_document_describes ─────────────────────────────────────────────
+
+def test_populate_document_describes_from_relationships():
+    spdx = {"SPDXID": "SPDXRef-DOCUMENT", "documentDescribes": [],
+            "relationships": [
+                {"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES",
+                 "relatedSpdxElement": "SPDXRef-a"},
+                {"spdxElementId": "SPDXRef-a", "relationshipType": "DEPENDS_ON",
+                 "relatedSpdxElement": "SPDXRef-b"},
+            ]}
+    out = populate_document_describes(spdx)
+    assert out["documentDescribes"] == ["SPDXRef-a"]
+
+
+def test_populate_document_describes_preserves_non_empty():
+    spdx = {"SPDXID": "SPDXRef-DOCUMENT", "documentDescribes": ["SPDXRef-x"],
+            "relationships": []}
+    assert populate_document_describes(spdx)["documentDescribes"] == ["SPDXRef-x"]
+
+
+# ── ensure_person_creator ───────────────────────────────────────────────────
+
+def test_ensure_person_creator_adds_person():
+    spdx = {"creationInfo": {"creators": ["Organization: Baxter", "Tool: fossa-cli"]}}
+    out = ensure_person_creator(spdx, "Jane Doe")
+    assert "Person: Jane Doe" in out["creationInfo"]["creators"]
+
+
+def test_ensure_person_creator_skips_when_person_present():
+    spdx = {"creationInfo": {"creators": ["Person: Existing"]}}
+    out = ensure_person_creator(spdx, "Jane Doe")
+    assert out["creationInfo"]["creators"] == ["Person: Existing"]
+
+
+def test_ensure_person_creator_noop_when_author_falsy():
+    spdx = {"creationInfo": {"creators": ["Organization: Baxter"]}}
+    assert ensure_person_creator(spdx, None)["creationInfo"]["creators"] == ["Organization: Baxter"]
+
+
+def _graph_doc():
+    return {
+        "documentDescribes": ["SPDXRef-root"],
+        "packages": [
+            {"SPDXID": "SPDXRef-root", "name": "root"},
+            {"SPDXID": "SPDXRef-direct", "name": "direct-lib"},
+            {"SPDXID": "SPDXRef-transitive", "name": "transitive-lib"},
+        ],
+        "relationships": [
+            {"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES",
+             "relatedSpdxElement": "SPDXRef-root"},
+            {"spdxElementId": "SPDXRef-root", "relationshipType": "DEPENDS_ON",
+             "relatedSpdxElement": "SPDXRef-direct"},
+            {"spdxElementId": "SPDXRef-direct", "relationshipType": "DEPENDS_ON",
+             "relatedSpdxElement": "SPDXRef-transitive"},
+        ],
+    }
+
+
+def test_filter_direct_dependencies_drops_transitive_only_package():
+    out = filter_direct_dependencies(_graph_doc())
+    ids = {p["SPDXID"] for p in out["packages"]}
+    assert ids == {"SPDXRef-root", "SPDXRef-direct"}
+    rel_types = {(r["spdxElementId"], r["relatedSpdxElement"]) for r in out["relationships"]}
+    assert ("SPDXRef-direct", "SPDXRef-transitive") not in rel_types
+
+
+def test_filter_direct_dependencies_keeps_dependency_of_encoding():
+    doc = {
+        "documentDescribes": ["SPDXRef-root"],
+        "packages": [
+            {"SPDXID": "SPDXRef-root", "name": "root"},
+            {"SPDXID": "SPDXRef-direct", "name": "direct-lib"},
+        ],
+        "relationships": [
+            {"spdxElementId": "SPDXRef-direct", "relationshipType": "DEPENDENCY_OF",
+             "relatedSpdxElement": "SPDXRef-root"},
+        ],
+    }
+    out = filter_direct_dependencies(doc)
+    ids = {p["SPDXID"] for p in out["packages"]}
+    assert ids == {"SPDXRef-root", "SPDXRef-direct"}
+
+
+def test_filter_direct_dependencies_no_root_returns_unchanged():
+    doc = {"documentDescribes": [], "packages": [{"SPDXID": "SPDXRef-x"}],
+           "relationships": []}
+    out = filter_direct_dependencies(doc)
+    assert out["packages"] == doc["packages"]
+    assert out is not doc
+
+
+def test_remove_incomplete_dependencies_drops_placeholder_and_its_relationships():
+    doc = {
+        "packages": [
+            {"SPDXID": "SPDXRef-real", "name": "real-pkg"},
+            {"SPDXID": "SPDXRef-placeholder", "name": "https://example.com/file.zip",
+             "comment": "Incomplete dependency"},
+        ],
+        "relationships": [
+            {"spdxElementId": "SPDXRef-root", "relationshipType": "DEPENDS_ON",
+             "relatedSpdxElement": "SPDXRef-placeholder"},
+            {"spdxElementId": "SPDXRef-placeholder", "relationshipType": "DEPENDENCY_OF",
+             "relatedSpdxElement": "SPDXRef-root"},
+            {"spdxElementId": "SPDXRef-root", "relationshipType": "DEPENDS_ON",
+             "relatedSpdxElement": "SPDXRef-real"},
+        ],
+    }
+    out = remove_incomplete_dependencies(doc)
+    ids = {p["SPDXID"] for p in out["packages"]}
+    assert ids == {"SPDXRef-real"}
+    assert len(out["relationships"]) == 1
+    assert out["relationships"][0]["relatedSpdxElement"] == "SPDXRef-real"
+
+
+def test_remove_incomplete_dependencies_noop_when_none_present():
+    doc = {"packages": [{"SPDXID": "SPDXRef-real", "name": "real-pkg"}],
+           "relationships": []}
+    out = remove_incomplete_dependencies(doc)
+    assert out["packages"] == doc["packages"]
+    assert out is not doc
+
+
+def test_populate_package_filenames_derives_from_download_location():
+    doc = {"packages": [
+        {"SPDXID": "SPDXRef-1", "name": "commons-lang3",
+         "downloadLocation": "https://repo1.maven.org/maven2/org/apache/commons/"
+                              "commons-lang3/3.18.0/commons-lang3-3.18.0-sources.jar"},
+    ]}
+    out = populate_package_filenames(doc)
+    assert out["packages"][0]["packageFileName"] == "commons-lang3-3.18.0-sources.jar"
+
+
+def test_populate_package_filenames_skips_existing_filename():
+    doc = {"packages": [
+        {"SPDXID": "SPDXRef-1", "name": "root",
+         "packageFileName": "custom+19518/helion/foo$1.0.0",
+         "downloadLocation": "https://example.com/other.jar"},
+    ]}
+    out = populate_package_filenames(doc)
+    assert out["packages"][0]["packageFileName"] == "custom+19518/helion/foo$1.0.0"
+
+
+def test_populate_package_filenames_skips_unresolvable_download_location():
+    doc = {"packages": [
+        {"SPDXID": "SPDXRef-1", "name": "no-download", "downloadLocation": "NOASSERTION"},
+    ]}
+    out = populate_package_filenames(doc)
+    assert "packageFileName" not in out["packages"][0]
+
+
+def test_populate_package_filenames_derives_from_maven_purl_when_no_download_location():
+    doc = {"packages": [
+        {"SPDXID": "SPDXRef-1", "name": "cc.nssm:nssm", "downloadLocation": "NOASSERTION",
+         "externalRefs": [{"referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl",
+                            "referenceLocator": "pkg:maven/cc.nssm/nssm@2.24"}]},
+    ]}
+    out = populate_package_filenames(doc)
+    assert out["packages"][0]["packageFileName"] == "nssm-2.24.jar"
+
+
+def test_populate_package_filenames_derives_from_npm_purl_drops_scope():
+    doc = {"packages": [
+        {"SPDXID": "SPDXRef-1", "name": "@angular/core", "downloadLocation": "NOASSERTION",
+         "externalRefs": [{"referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl",
+                            "referenceLocator": "pkg:npm/%40angular/core@21.2.22"}]},
+    ]}
+    out = populate_package_filenames(doc)
+    assert out["packages"][0]["packageFileName"] == "core-21.2.22.tgz"
+
+
+def test_populate_package_filenames_skips_unresolvable_purl_type():
+    doc = {"packages": [
+        {"SPDXID": "SPDXRef-1", "name": "golang.org/x/text", "downloadLocation": "NOASSERTION",
+         "externalRefs": [{"referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl",
+                            "referenceLocator": "pkg:golang/golang.org/x/text@0.14.0"}]},
+    ]}
+    out = populate_package_filenames(doc)
+    assert "packageFileName" not in out["packages"][0]

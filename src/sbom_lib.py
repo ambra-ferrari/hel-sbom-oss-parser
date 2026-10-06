@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+import urllib.parse
 from copy import copy
 
 
@@ -412,6 +413,182 @@ def remove_excluded_packages(spdx: dict, excluded: dict[str, str]) -> dict:
     return out
 
 
+def remove_incomplete_dependencies(spdx: dict) -> dict:
+    """Return a copy of an SPDX doc with FOSSA's "Incomplete dependency"
+    placeholder packages dropped from the machine-readable SBOM.
+
+    Per `is_incomplete_dependency`, these placeholders duplicate a real
+    package that already carries the actual version/license/checksum data
+    (e.g. a JRE or MongoDB Windows zip is described both by a proper package
+    and by one of these placeholders sharing the same download URL). Left
+    in, they drag down BSI TR-03183-2 "Distribution licences" and "Hash
+    value" component counts for no benefit — every relationship pointing at
+    them is paired with an equivalent relationship to the real package. The
+    input doc is not mutated.
+    """
+    packages = spdx.get("packages", []) or []
+    remove_ids = {
+        pkg.get("SPDXID") for pkg in packages if is_incomplete_dependency(pkg)
+    }
+    if not remove_ids:
+        return dict(spdx)
+
+    out = dict(spdx)
+    out["packages"] = [p for p in packages if p.get("SPDXID") not in remove_ids]
+    out["relationships"] = [
+        dict(rel) for rel in (spdx.get("relationships", []) or [])
+        if rel.get("spdxElementId") not in remove_ids
+        and rel.get("relatedSpdxElement") not in remove_ids
+    ]
+    return out
+
+
+def _filename_from_purl(pkg: dict) -> str | None:
+    """Derive a conventional artifact file name from a package's purl.
+
+    FOSSA never sets `downloadLocation` for registry-resolved dependencies
+    (Maven/npm/...), so there's no URL to take a file name from — but the
+    purl still carries the package-manager coordinate, which maps to each
+    ecosystem's well-known artifact naming convention:
+      - Maven: `pkg:maven/<groupId>/<artifactId>@<version>` -> `<artifactId>-<version>.jar`
+      - npm:   `pkg:npm/<name>@<version>` (scope dropped) -> `<name>-<version>.tgz`
+    Returns None for any other purl type, a malformed purl, or no purl at all.
+    """
+    purl = None
+    for ref in pkg.get("externalRefs", []) or []:
+        if ref.get("referenceType") == "purl":
+            purl = ref.get("referenceLocator")
+            break
+    if not purl or not purl.startswith("pkg:"):
+        return None
+    without_scheme = purl[len("pkg:"):]
+    path, _, _qualifiers = without_scheme.partition("?")
+    ecosystem, _, rest = path.partition("/")
+    rest, _, version = rest.rpartition("@")
+    if not rest or not version:
+        return None
+    if ecosystem == "maven":
+        artifact_id = rest.rsplit("/", 1)[-1]
+        return f"{urllib.parse.unquote(artifact_id)}-{urllib.parse.unquote(version)}.jar"
+    if ecosystem == "npm":
+        name = urllib.parse.unquote(rest.rsplit("/", 1)[-1])
+        return f"{name}-{urllib.parse.unquote(version)}.tgz"
+    return None
+
+
+def populate_package_filenames(spdx: dict) -> dict:
+    """Return a copy of an SPDX doc with `packageFileName` filled in wherever
+    it is missing, from `downloadLocation` or, failing that, from the purl.
+
+    FOSSA only sets `packageFileName` on each project's own root package (to
+    its FOSSA project locator); dependency packages carry no
+    `packageFileName`. Two sources are tried in order:
+      1. `downloadLocation`'s last path segment, when it is a real URL (e.g.
+         ".../commons-lang3-3.18.0-sources.jar");
+      2. the ecosystem's conventional artifact name derived from the
+         package's purl (see `_filename_from_purl`), for registry-resolved
+         dependencies that have no download URL at all (`downloadLocation`
+         is `NOASSERTION`/`NONE`/empty).
+    Leaves packages with neither source untouched. Never overwrites an
+    existing `packageFileName`. The input doc is not mutated.
+    """
+    packages = spdx.get("packages", []) or []
+    new_pkgs = []
+    changed = False
+    for pkg in packages:
+        if "packageFileName" in pkg:
+            new_pkgs.append(pkg)
+            continue
+        filename = None
+        download = (pkg.get("downloadLocation") or "").strip()
+        if download and download not in ("NOASSERTION", "NONE"):
+            path_tail = urllib.parse.urlsplit(download).path.rsplit("/", 1)[-1]
+            if path_tail:
+                filename = urllib.parse.unquote(path_tail)
+        if not filename:
+            filename = _filename_from_purl(pkg)
+        if not filename:
+            new_pkgs.append(pkg)
+            continue
+        p = dict(pkg)
+        p["packageFileName"] = filename
+        new_pkgs.append(p)
+        changed = True
+
+    if not changed:
+        return dict(spdx)
+    out = dict(spdx)
+    out["packages"] = new_pkgs
+    return out
+
+
+def filter_direct_dependencies(spdx: dict) -> dict:
+    """Reduce an SPDX doc to its root(s) + their *direct* dependencies only.
+
+    FOSSA encodes the graph as: SPDXRef-DOCUMENT --DESCRIBES--> <root>, then
+    <root> --DEPENDS_ON--> <dep> for every dependency (direct and, via
+    dep->dep edges, transitive). A dependency is *direct* when a root depends
+    on it directly; anything only reachable through another dependency is
+    transitive and is dropped here. Works with one root or many (e.g. an
+    aggregated release SBOM with one root per project). Shared by
+    `download_release_sbom.py` (default: `DIRECT_ONLY="true"` in
+    `fossa.config`, applied to the downloaded machine-readable SBOM) and
+    `sbom_to_excel.py` (applied again before building the official SBOM
+    Excel, as defense-in-depth should a source SBOM ever carry transitive
+    edges).
+    """
+    rels = spdx.get("relationships", []) or []
+    pkgs = spdx.get("packages", []) or []
+
+    roots: set[str] = {
+        r.get("relatedSpdxElement", "")
+        for r in rels
+        if r.get("relationshipType") == "DESCRIBES"
+    }
+    roots.update(spdx.get("documentDescribes", []) or [])
+    roots.discard("")
+
+    if not roots:
+        # No identifiable root — cannot tell direct from transitive; keep as-is.
+        return dict(spdx)
+
+    direct: set[str] = set()
+    for r in rels:
+        rtype = r.get("relationshipType")
+        if rtype == "DEPENDS_ON" and r.get("spdxElementId") in roots:
+            direct.add(r.get("relatedSpdxElement", ""))
+        elif rtype == "DEPENDENCY_OF" and r.get("relatedSpdxElement") in roots:
+            direct.add(r.get("spdxElementId", ""))
+    direct.discard("")
+
+    keep = roots | direct
+    new_pkgs = []
+    for pkg in pkgs:
+        if pkg.get("SPDXID") in keep:
+            p = dict(pkg)
+            p.pop("hasFiles", None)  # file-level detail is not needed at dep level
+            new_pkgs.append(p)
+
+    new_rels = []
+    for r in rels:
+        rtype = r.get("relationshipType")
+        a, b = r.get("spdxElementId"), r.get("relatedSpdxElement")
+        if rtype == "DESCRIBES" and b in roots:
+            new_rels.append(r)
+        elif rtype == "DEPENDS_ON" and a in roots and b in direct:
+            new_rels.append(r)
+        elif rtype == "DEPENDENCY_OF" and b in roots and a in direct:
+            new_rels.append(r)
+
+    out = dict(spdx)
+    out["packages"] = new_pkgs
+    out["relationships"] = new_rels
+    out.pop("files", None)
+    if "documentDescribes" in out:
+        out["documentDescribes"] = [d for d in out["documentDescribes"] if d in roots]
+    return out
+
+
 def set_document_name(spdx: dict, name: str | None) -> dict:
     """Return a copy of an SPDX doc with its top-level `name` field overridden.
 
@@ -428,6 +605,155 @@ def set_document_name(spdx: dict, name: str | None) -> dict:
         return dict(spdx)
     out = dict(spdx)
     out["name"] = name
+    return out
+
+
+# A well-formed CPE 2.3 formatted string per the SPDX 2.3 externalRef regex:
+# it must start with `cpe:2.3:` and a part component of a/h/o/*/-.
+_CPE23_PREFIX = re.compile(r"^cpe:2\.3:[aho*\-]:")
+# Legacy CPE 2.2 URI binding (also accepted by SPDX as cpe22Type).
+_CPE22_PREFIX = re.compile(r"^cpe:/[aho]?:")
+
+
+def _is_valid_cpe(locator: str) -> bool:
+    """True when `locator` is a well-formed CPE 2.2/2.3 identifier."""
+    loc = (locator or "").strip()
+    return bool(_CPE23_PREFIX.match(loc) or _CPE22_PREFIX.match(loc))
+
+
+def drop_invalid_cpe_refs(spdx: dict) -> dict:
+    """Return a copy of an SPDX doc with malformed CPE externalRefs removed.
+
+    download_release_sbom.add_cpe_refs records each package's Maven-style
+    ``groupId:artifactId`` coordinate as a ``cpe23Type`` external reference so
+    the human-readable Excel can surface it. Those values are *not* valid
+    CPE 2.3 identifiers, so the SPDX document fails semantic validation
+    (``externalPackageRef locator of type "cpe23Type" must conform ...``).
+
+    The package coordinate is already carried losslessly by the ``purl``
+    external reference, so for the machine-readable deliverable we drop every
+    ``cpe*`` reference whose locator is not a well-formed CPE. Genuine CPEs (if
+    any) are preserved.
+    """
+    out = dict(spdx)
+    packages = []
+    for pkg in spdx.get("packages", []) or []:
+        p = dict(pkg)
+        refs = p.get("externalRefs")
+        if refs:
+            kept = [
+                r for r in refs
+                if not str(r.get("referenceType", "")).lower().startswith("cpe")
+                or _is_valid_cpe(r.get("referenceLocator", ""))
+            ]
+            if kept:
+                p["externalRefs"] = kept
+            else:
+                p.pop("externalRefs", None)
+        packages.append(p)
+    out["packages"] = packages
+    return out
+
+
+_LICENSEREF_TOKEN = re.compile(r"LicenseRef-[0-9A-Za-z.\-]+")
+
+
+def declare_license_refs(spdx: dict) -> dict:
+    """Return a copy of an SPDX doc with every used ``LicenseRef-*`` declared.
+
+    FOSSA emits non-SPDX-List licenses as opaque ``LicenseRef-<id>`` tokens in
+    ``licenseConcluded`` / ``licenseDeclared`` / ``licenseInfoFromFiles``. SPDX
+    2.3 requires each such reference to be defined in the document-level
+    ``hasExtractedLicensingInfos`` array; otherwise the document fails semantic
+    validation (``Unrecognized license reference: LicenseRef-...``).
+
+    This scans all package license fields, collects every distinct
+    ``LicenseRef-<id>`` token, and adds a conforming extracted-licensing-info
+    entry (``licenseId`` + required ``extractedText`` + a human-readable
+    ``name`` derived via :func:`normalize_license`) for any not already
+    declared. The licenses themselves are left untouched, so no license
+    interpretation is changed — the source data is preserved verbatim and
+    merely declared.
+    """
+    out = dict(spdx)
+    used: set[str] = set()
+    for pkg in spdx.get("packages", []) or []:
+        fields = [pkg.get("licenseConcluded"), pkg.get("licenseDeclared")]
+        fields.extend(pkg.get("licenseInfoFromFiles", []) or [])
+        for value in fields:
+            if value:
+                used.update(_LICENSEREF_TOKEN.findall(str(value)))
+
+    existing = {
+        e.get("licenseId")
+        for e in spdx.get("hasExtractedLicensingInfos", []) or []
+    }
+    infos = list(spdx.get("hasExtractedLicensingInfos", []) or [])
+    for lic in sorted(used):
+        if lic in existing:
+            continue
+        infos.append({
+            "licenseId": lic,
+            "extractedText": (
+                "License text not provided by the SBOM source (FOSSA); this "
+                "reference preserves the source's non-SPDX-List license "
+                "identifier verbatim."
+            ),
+            "name": normalize_license(lic),
+        })
+    if infos:
+        out["hasExtractedLicensingInfos"] = infos
+    return out
+
+
+def populate_document_describes(spdx: dict) -> dict:
+    """Return a copy with ``documentDescribes`` filled from DESCRIBES rels.
+
+    The SBOM already records which packages the document describes via
+    ``SPDXRef-DOCUMENT`` → ``DESCRIBES`` relationships, but leaves the
+    convenience ``documentDescribes`` array empty. Populating it (idempotently,
+    only when empty) makes the described top-level products discoverable by
+    consumers that read that field directly, without adding or changing any
+    relationship.
+    """
+    out = dict(spdx)
+    if out.get("documentDescribes"):
+        return out
+    doc_id = spdx.get("SPDXID", "SPDXRef-DOCUMENT")
+    described = [
+        r.get("relatedSpdxElement")
+        for r in spdx.get("relationships", []) or []
+        if r.get("relationshipType") == "DESCRIBES"
+        and r.get("spdxElementId") == doc_id
+        and r.get("relatedSpdxElement")
+    ]
+    if described:
+        seen: set[str] = set()
+        out["documentDescribes"] = [
+            d for d in described if not (d in seen or seen.add(d))
+        ]
+    return out
+
+
+def ensure_person_creator(spdx: dict, author: str | None) -> dict:
+    """Return a copy with a ``Person:`` creator added to ``creationInfo``.
+
+    SPDX records the SBOM author(s) in ``creationInfo.creators``. The FOSSA
+    export lists only an ``Organization:`` and ``Tool:`` creators; regulated
+    contexts (IEC 62304 / FDA premarket SBOM) expect the responsible human
+    author to be identifiable. This adds ``Person: <author>`` when an author is
+    provided and no ``Person:`` creator is already present. No-op when `author`
+    is falsy.
+    """
+    if not author:
+        return dict(spdx)
+    out = dict(spdx)
+    creation = dict(spdx.get("creationInfo", {}) or {})
+    creators = list(creation.get("creators", []) or [])
+    if not any(str(c).strip().lower().startswith("person:") for c in creators):
+        creators.append(f"Person: {author}")
+    creation["creators"] = creators
+    out["creationInfo"] = creation
     return out
 
 

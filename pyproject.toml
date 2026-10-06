@@ -15,6 +15,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+conformance = [
+    "spdx-tools>=0.8",
+    "check-jsonschema>=0.28",
+    "jsonschema>=4",
+    "ntia-conformance-checker>=3",
+]
 
 [tool.setuptools]
 package-dir = { "" = "src" }

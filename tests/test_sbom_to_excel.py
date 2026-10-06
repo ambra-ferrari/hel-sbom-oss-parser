@@ -363,3 +363,47 @@ def test_build_excel_drops_explicitly_excluded_components(tmp_path):
     names = [r[1] for r in rows]
     assert "hel-app" in names
     assert not any(n and "licensing" in n.lower() for n in names)
+
+
+def test_build_excel_reports_direct_dependencies_only(tmp_path):
+    # Root --DEPENDS_ON--> direct-dep --DEPENDS_ON--> transitive-only-dep.
+    # Even though the source SBOM carries the full graph (kept there for
+    # CISA 2026 Coverage), the Excel deliverable must drop the
+    # transitive-only package and keep "Direct" for everything it shows.
+    doc = {
+        "spdxVersion": "SPDX-2.3",
+        "name": "Test",
+        "creationInfo": {"created": "2026-09-25T00:00:00Z",
+                          "creators": ["Organization: Baxter", "Tool: fossa-cli"]},
+        "documentDescribes": ["SPDXRef-root"],
+        "packages": [
+            {"SPDXID": "SPDXRef-root", "name": "hel-app",
+             "versionInfo": "1.0.0", "supplier": "Organization: Baxter",
+             "externalRefs": []},
+            {"SPDXID": "SPDXRef-direct", "name": "direct-lib",
+             "versionInfo": "2.0.0", "supplier": "Organization: npm",
+             "externalRefs": []},
+            {"SPDXID": "SPDXRef-transitive", "name": "transitive-only-lib",
+             "versionInfo": "3.0.0", "supplier": "Organization: npm",
+             "externalRefs": []},
+        ],
+        "relationships": [
+            {"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES",
+             "relatedSpdxElement": "SPDXRef-root"},
+            {"spdxElementId": "SPDXRef-root", "relationshipType": "DEPENDS_ON",
+             "relatedSpdxElement": "SPDXRef-direct"},
+            {"spdxElementId": "SPDXRef-direct", "relationshipType": "DEPENDS_ON",
+             "relatedSpdxElement": "SPDXRef-transitive"},
+        ],
+    }
+    p = tmp_path / "sbom.json"
+    p.write_text(json_module.dumps(doc))
+    out = tmp_path / "out.xlsx"
+    build_excel(str(p), TEMPLATE, str(out), product_name="P", product_version="1")
+
+    rows = _read_data_rows(str(out))
+    names = [r[1] for r in rows]
+    dep_rels = [r[4] for r in rows]  # column E = Dependency Relationship
+    assert "direct-lib" in names
+    assert "transitive-only-lib" not in names
+    assert set(dep_rels) == {"Direct"}

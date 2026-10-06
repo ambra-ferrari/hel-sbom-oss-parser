@@ -21,3 +21,6 @@ dist/
 # --- Editor / OS cruft ---
 ~$*
 .DS_Store
+
+# Conformance validator virtualenv (src/validate_sbom.sh)
+.venv-conformance/

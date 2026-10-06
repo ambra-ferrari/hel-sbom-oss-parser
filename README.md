@@ -15,6 +15,8 @@ hel-sbom-oss-parser/
 │   ├── sbom_to_oss_dependencies.py  # → Helion OTS-SOUP OSS dependencies xlsx
 │   ├── enrich_eol.py                # → end-of-support date cache + report
 │   ├── download_release_sbom.py     # aggregate a FOSSA release-group SBOM
+│   ├── normalize_sbom_aliases.py    # → normalized, SPDX-2.3-conformant SBOM
+│   ├── validate_sbom.sh             # conformance-check the SBOM (schema/NTIA)
 │   └── download_sbom.sh             # single-project FOSSA SBOM download
 ├── tools/                # auxiliary reviewer agents
 │   └── lockfile_sbom_agent.py       # npm lockfile vs SBOM version check
@@ -97,9 +99,11 @@ and merges them into one valid SPDX 2.3 document (SPDXIDs are namespaced per
 project so nothing collides). Standard library only — no extra dependencies.
 
 By default only each project's **direct** dependencies are kept (the packages
-the project root `DEPENDS_ON` directly); transitive dependencies are dropped.
-Use `--all-deps` (or `DIRECT_ONLY="false"` in `fossa.config`) to keep the full
-graph. Test-only packages (e.g. `testify`, `testcontainers`, `junit`, `jest`,
+the project root `DEPENDS_ON` directly); transitive dependencies are dropped —
+this applies to both the downloaded machine-readable SBOM and (redundantly,
+as defense-in-depth) the official SBOM Excel. Use `--all-deps` (or
+`DIRECT_ONLY="false"` in `fossa.config`) to keep the full graph instead.
+Test-only packages (e.g. `testify`, `testcontainers`, `junit`, `jest`,
 first-party test modules) are dropped by default — use `--include-test` (or
 `EXCLUDE_TEST="false"`) to keep them, and `TEST_PATTERNS` to extend the match
 list. The URLs of every source project are recorded in the SPDX
@@ -130,10 +134,11 @@ Populates the official SBOM Excel template from an SPDX JSON SBOM file.
 
 ### Classification rules
 
-- **Dependency relationship**: every real component is a direct dependant of
-  one of the product roots (verified via the SPDX `DEPENDS_ON` graph — there
-  is no recorded transitive chain in this SBOM), so all rows are classified
-  `Direct`.
+- **Dependency relationship**: the SBOM is filtered to each product root's
+  **direct** dependencies only (via `sbom_lib.filter_direct_dependencies`),
+  dropping anything only reachable through another dependency, so all rows
+  are classified `Direct`. This matches the machine-readable SBOM, which is
+  also direct-only by default.
 - **OSS vs First-Party**: components whose `supplier` contains
   `"Custom (provided build)"` are internally developed (Baxter) components;
   everything else is classified `OSS`. First-Party rows are listed first in
@@ -271,6 +276,74 @@ it from the release-group/release ids or titles (e.g.
 consumers of the file. Configure it via `OSS_SBOM_DOCUMENT_NAME` in
 `fossa.config` (e.g. `"Truelink 4 (or Helion)/1.8.0"`) or override per-run
 with `--document-name`. Leave empty to keep the FOSSA-derived name as-is.
+
+### SPDX 2.3 conformance pass (`normalize_sbom_aliases.py`)
+
+In addition to canonicalizing names, `normalize_sbom_aliases.py` runs a
+conformance pass so the machine-readable deliverable validates cleanly against
+the official SPDX 2.3 semantic validator (`spdx-tools`), not just the JSON
+schema:
+
+- **CPE cleanup** — drops malformed `cpe23Type` external references (FOSSA
+  packages carry a Maven-style `groupId:artifactId` coordinate, which is not a
+  valid CPE 2.3 identifier; the coordinate is already preserved losslessly by
+  the package `purl`). Genuine CPEs, if any, are kept.
+- **License declaration** — declares every `LicenseRef-*` used in a package's
+  license fields in the document-level `hasExtractedLicensingInfos` array
+  (required by SPDX 2.3). The license expressions themselves are left untouched,
+  so no license is reinterpreted.
+- **`documentDescribes`** — populated from the existing
+  `SPDXRef-DOCUMENT → DESCRIBES` relationships so the described top-level
+  products are discoverable via that field.
+- **SBOM author** — records the responsible human author as a SPDX `Person:`
+  creator in `creationInfo`, alongside the `Organization:`/`Tool:` creators,
+  for IEC 62304 / FDA SBOM traceability. Configure it via `OSS_SBOM_AUTHOR` in
+  `fossa.config`; leave empty to leave creators untouched.
+
+### SBOM format & regulatory alignment (SPDX 2.3)
+
+The deliverable is **SPDX 2.3 JSON**. IEC 62304 itself does not mandate an SBOM
+format; the SBOM requirement comes from the companion security standards and
+guidance for medical-device software — **FDA premarket cybersecurity guidance
+(2023)**, **IEC 81001-5-1** and **AAMI SW96** — which require a machine-readable
+SBOM meeting the **NTIA minimum elements** and accept SPDX, CycloneDX or SWID.
+
+SPDX 2.3 is a backward-compatible superset of **SPDX 2.2.1**, the version
+standardized as **ISO/IEC 5962:2021**, and is broadly supported by validation
+tooling. It carries all NTIA minimum elements (component name, version,
+supplier, unique identifiers, dependency relationships, SBOM author, and
+timestamp). If a reviewer requires the ISO citation explicitly, declare it as
+"SPDX 2.3, a backward-compatible superset of SPDX 2.2.1 (ISO/IEC 5962:2021)".
+
+### Validating the machine-readable SBOM (`src/validate_sbom.sh`)
+
+There is no official EU/CRA/MDR portal that validates or certifies an SBOM;
+conformance is demonstrated with the standard open-source toolkit. This repo
+bundles both a one-shot script and pytest gates:
+
+```bash
+# One-shot validation (self-contained: builds a cached .venv-conformance,
+# fetches the SPDX 2.3 schema, runs all checks). Defaults to the deliverable.
+./src/validate_sbom.sh [outputs/sbom_machine_readable/sbom_new.json]
+
+# Or as part of the test suite (install the validators first):
+pip install '.[conformance]'
+pytest tests/test_sbom_conformance.py
+```
+
+Checks performed:
+
+| # | Check | Tool | Gate |
+|---|-------|------|------|
+| 1 | SPDX 2.3 JSON Schema | `check-jsonschema` / `jsonschema` | hard |
+| 2 | SPDX 2.3 semantic rules | `spdx-tools` | hard |
+| 3 | NTIA minimum elements (CRA/FDA baseline) | `ntia-conformance-checker` | hard |
+| 4 | Quality score / BSI TR-03183 | `sbomqs` (Go, optional) | advisory |
+
+Checks 1-3 fail the run on any violation; check 4 is advisory and is skipped
+when `sbomqs` is not installed (`go install github.com/interlynk-io/sbomqs@latest`).
+The official SPDX online validator (`tools.spdx.org/app/validate/`) is the GUI
+equivalent of check 2.
 
 ---
 

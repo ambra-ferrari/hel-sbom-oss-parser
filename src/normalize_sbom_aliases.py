@@ -17,6 +17,11 @@ writes a new SPDX JSON where:
     relationship that references them — used to scrub components that must
     never appear in the machine-readable SBOM (e.g. internal tooling never
     meant to be reported);
+  - FOSSA's "Incomplete dependency" placeholder packages (duplicates of a
+    real package, with no license/checksum/filename of their own) are
+    dropped, along with every relationship that references them;
+  - every package missing `packageFileName` has one derived from its
+    `downloadLocation` URL's last path segment, where resolvable;
   - the document's top-level `name` is overridden with a static, configurable
     value (OSS_SBOM_DOCUMENT_NAME in fossa.config, or --document-name), since
     FOSSA derives it from the release-group/release ids/titles (e.g.
@@ -38,10 +43,16 @@ from pathlib import Path
 
 from sbom_lib import (
     apply_component_aliases,
+    declare_license_refs,
     dedupe_first_party_packages,
+    drop_invalid_cpe_refs,
+    ensure_person_creator,
     load_component_aliases,
     load_excluded_components,
+    populate_document_describes,
+    populate_package_filenames,
     remove_excluded_packages,
+    remove_incomplete_dependencies,
     set_document_name,
 )
 
@@ -67,6 +78,10 @@ def main() -> None:
                     help="Static name to set as the SPDX document's top-level "
                          "'name' field, overriding the FOSSA-derived release "
                          "name (e.g. 'Truelink 4 (or Helion)/1.8.0')")
+    ap.add_argument("--sbom-author", default=cfg.get("OSS_SBOM_AUTHOR"),
+                    help="Responsible human author recorded as a SPDX "
+                         "'Person:' creator in creationInfo (IEC 62304 / FDA "
+                         "SBOM traceability). Omit to leave creators untouched.")
     ap.add_argument("--output", required=True,
                     help="Path to write the canonicalized SPDX JSON to")
     args = ap.parse_args()
@@ -80,7 +95,19 @@ def main() -> None:
     aliased = apply_component_aliases(spdx, aliases)
     deduped = dedupe_first_party_packages(aliased)
     excluded_out = remove_excluded_packages(deduped, excluded)
-    out = set_document_name(excluded_out, args.document_name)
+    # FOSSA's "Incomplete dependency" placeholders duplicate a real package
+    # that already carries the real license/checksum/filename data — drop
+    # them so BSI TR-03183-2 "Distribution licences" / "Hash value" counts
+    # aren't dragged down by packages with no real data to carry.
+    completed = remove_incomplete_dependencies(excluded_out)
+    named = set_document_name(completed, args.document_name)
+    # SPDX 2.3 conformance: drop malformed CPE refs, declare used LicenseRefs,
+    # surface described products, and record the responsible author.
+    cpe_fixed = drop_invalid_cpe_refs(named)
+    licensed = declare_license_refs(cpe_fixed)
+    described = populate_document_describes(licensed)
+    filenamed = populate_package_filenames(described)
+    out = ensure_person_creator(filenamed, args.sbom_author)
 
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)

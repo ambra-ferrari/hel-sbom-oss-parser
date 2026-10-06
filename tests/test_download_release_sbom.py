@@ -13,6 +13,23 @@ def test_merge_spdx_adds_baxter_organization_creator():
     assert "Organization: Baxter" in merged["creationInfo"]["creators"]
 
 
+def test_merge_spdx_preserves_source_tool_version():
+    doc = {"spdxVersion": "SPDX-2.3", "packages": [], "files": [],
+           "relationships": [], "documentDescribes": [],
+           "creationInfo": {"creators": ["Organization: FOSSA",
+                                          "Tool: fossa-cli-3.9.44"]}}
+    merged = merge_spdx([("proj", doc)], "Test Doc")
+    assert "Tool: fossa-cli-3.9.44" in merged["creationInfo"]["creators"]
+    assert "Tool: fossa-cli" not in merged["creationInfo"]["creators"]
+
+
+def test_merge_spdx_falls_back_to_bare_tool_name_without_source_version():
+    doc = {"spdxVersion": "SPDX-2.3", "packages": [], "files": [],
+           "relationships": [], "documentDescribes": []}
+    merged = merge_spdx([("proj", doc)], "Test Doc")
+    assert "Tool: fossa-cli" in merged["creationInfo"]["creators"]
+
+
 from download_release_sbom import purl_to_coordinate
 
 

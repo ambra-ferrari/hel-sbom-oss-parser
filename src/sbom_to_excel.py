@@ -4,10 +4,13 @@ sbom_to_excel.py — Populate the official SBOM Excel template from an SPDX 2.3
 JSON SBOM file (e.g. `sbom_new.json`).
 
 Classification rules inferred from the SBOM's own SPDX relationships/metadata:
-  - Dependency relationship: every real component is verified (via the SPDX
-    DEPENDS_ON graph) to be a direct dependant of one of the product roots —
-    there is no recorded intermediate/transitive chain in this SBOM — so all
-    rows are classified "Direct".
+  - Dependency relationship: the SBOM is filtered (via
+    `sbom_lib.filter_direct_dependencies`) to each product root's *direct*
+    dependencies only, dropping anything only reachable through another
+    dependency — so every remaining row is classified "Direct". This matches
+    the machine-readable SBOM itself, which is also direct-only by default
+    (`DIRECT_ONLY="true"` in `fossa.config`); the filter here is
+    defense-in-depth should a source SBOM ever carry transitive edges.
   - OSS vs First-Party: components whose `supplier` is the distinctive
     "Organization: FOSSA (Custom (provided build))" marker are internally
     developed (Baxter) components; everything else (has a real npm/Maven/
@@ -46,6 +49,7 @@ from sbom_lib import (
     load_component_aliases,
     load_excluded_components,
     first_party_artifact_key,
+    filter_direct_dependencies,
     copy_row_style,
 )
 
@@ -163,6 +167,12 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
     tool = extract_tool(creators)
     author_of_sbom = f"{org} / {tool}" if tool else org
 
+    # The official SBOM Excel always lists direct dependencies only — drop
+    # anything only reachable through another dependency before extracting
+    # rows (defense-in-depth: the machine-readable SBOM is direct-only by
+    # default too, see `DIRECT_ONLY` in `fossa.config`).
+    sbom = filter_direct_dependencies(sbom)
+
     packages = sbom.get("packages", [])
     packages = [pkg for pkg in packages if not is_incomplete_dependency(pkg)]
     packages = [pkg for pkg in packages if not is_excluded_component(pkg.get("name", ""), excluded)]
@@ -233,10 +243,8 @@ def build_excel(sbom_path: str, template_path: str, output_path: str,
         supplier_name = extract_supplier_name(supplier_raw, originator_raw)
         cpe = get_cpe(external_refs)
         name = resolve_component_name(raw_name, cpe)
-        # All components in this SBOM are declared directly by one of the
-        # product manifests (verified via the SPDX DEPENDS_ON relationships:
-        # every real component is a direct dependant of a product root, with
-        # no intermediate transitive chain recorded) — so every row is Direct.
+        # `packages` was already filtered to each root's direct dependencies
+        # (see `filter_direct_dependencies` above), so every row is Direct.
         dep_rel = "Direct"
 
         first_party = is_first_party(pkg)
